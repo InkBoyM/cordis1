@@ -86,8 +86,16 @@ def startup_event():
                 db.rollback()
 
         system_user = db.query(db_models.DBUser).filter(func.lower(db_models.DBUser.username) == "system").first()
-        desired_hash = "$2b$12$nIW.6/aVmj9CGIlmVEsfa.hQ9XG.qGETc34QFULL21eISUUIKmsCG"
         if not system_user:
+            import os
+            import getpass
+            system_password = os.environ.get("SYSTEM_ADMIN_PASSWORD")
+            if not system_password:
+                system_password = getpass.getpass("Enter password for System account: ")
+            
+            salt = bcrypt.gensalt()
+            desired_hash = bcrypt.hashpw(system_password.encode('utf-8'), salt).decode('utf-8')
+            
             system_user = db_models.DBUser(
                 username="System",
                 display_name="System",
@@ -101,12 +109,6 @@ def startup_event():
             db.commit()
             db.refresh(system_user)
         else:
-            try:
-                is_correct = bcrypt.checkpw("cordisSystemAdmin123!".encode('utf-8'), system_user.hashed_password.encode('utf-8'))
-            except Exception:
-                is_correct = False
-            if not is_correct:
-                system_user.hashed_password = desired_hash
             perms = list(system_user.permissions or [])
             if "ADMIN" in perms: perms.remove("ADMIN")
             if "SYSTEM_ADMIN" not in perms: perms.append("SYSTEM_ADMIN")
