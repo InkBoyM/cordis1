@@ -96,6 +96,20 @@ const CROP_CONFIG: Record<CropTarget, { aspect: number; cropShape: 'round' | 're
   serverBanner: { aspect: 3, cropShape: 'rect', outputWidth: 1500, outputHeight: 500, title: 'Crop Server Banner' },
 };
 
+export const getUserHighestRole = (roles: string[], serverRoles: Record<string, any>) => {
+  if (!roles || roles.length === 0) return { id: 'default', name: 'Default', hierarchy: 0, color: '' };
+  let highest = null;
+  for (const roleId of roles) {
+    const roleData = serverRoles[roleId];
+    if (roleData) {
+      if (!highest || roleData.hierarchy > highest.hierarchy) {
+        highest = { id: roleId, ...roleData };
+      }
+    }
+  }
+  return highest || { id: 'default', name: 'Default', hierarchy: 0, color: '' };
+};
+
 const formatLastActive = (lastActiveAt: number | undefined, isOnline: boolean) => {
   if (isOnline) return "Active now";
   if (!lastActiveAt) return "Unknown";
@@ -559,6 +573,7 @@ function App() {
   const [showServerSettings, setShowServerSettings] = useState(false);
   const [isSavingServer, setIsSavingServer] = useState(false);
   const [serverName, setServerName] = useState('');
+  const [serverRolesSettings, setServerRolesSettings] = useState<Record<string, any>>({});
   const [serverDescription, setServerDescription] = useState('');
   const [serverImage, setServerImage] = useState('');
   const [serverBanner, setServerBanner] = useState('');
@@ -1601,7 +1616,7 @@ function App() {
     }
   };
 
-  const setMemberRole = async (memberId: number, role: string) => {
+  const setMemberRoles = async (memberId: number, roles: string[]) => {
     if (!activeServer) return;
     try {
       const res = await fetch(`${API_BASE}/servers/${activeServer.server_id}/members/${memberId}/role`, {
@@ -1610,11 +1625,11 @@ function App() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ role })
+        body: JSON.stringify({ roles })
       });
       if (res.ok) {
         const updated = await res.json();
-        setServerMembers(prev => prev.map(m => m.user_id === memberId ? { ...m, server_role: updated.server_role } : m));
+        setServerMembers(prev => prev.map(m => m.user_id === memberId ? { ...m, server_roles: updated.server_roles } : m));
         await loadServerChannelsAndCategories(activeServer.server_id);
       } else {
         const err = await res.json().catch(() => ({}));
@@ -1707,6 +1722,7 @@ function App() {
       setServerDescription(activeServer.server_description || '');
       setServerImage(activeServer.server_image || '');
       setServerBanner(activeServer.server_banner || '');
+      setServerRolesSettings(JSON.parse(JSON.stringify(activeServer.roles || {})));
       setShowServerSettings(true);
       if (isMobile) setMobileNavOpen(false);
     }
@@ -1937,6 +1953,14 @@ function App() {
         })
       });
       if (res.ok) {
+        await fetch(`${API_BASE}/servers/${activeServer.server_id}/roles`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ roles: serverRolesSettings })
+        });
         const updated = await res.json();
         setActiveServer(updated);
         setShowServerSettings(false);
@@ -2505,9 +2529,18 @@ function App() {
 
   const isMuted = user && user.muted_until && (user.muted_until * 1000) > Date.now();
   const effectivePinnedServerId = getEffectivePinnedServerId(servers);
-  const myServerRole = activeServer ? (activeServer.my_role || (activeServer.owner_id === user?.user_id ? 'admin' : 'default')) : 'default';
-  const isServerAdmin = !!activeServer && (activeServer.owner_id === user?.user_id || myServerRole === 'admin');
-  const isServerMod = isServerAdmin || myServerRole === 'mod';
+  const myServerRoles = activeServer?.my_roles || ['default'];
+  const hasPermission = (perm: string) => {
+    if (activeServer?.owner_id === user?.user_id) return true;
+    for (const rid of myServerRoles) {
+      const perms = activeServer?.roles?.[rid]?.permissions || [];
+      if (perms.includes(perm) || perms.includes('ADMIN')) return true;
+    }
+    return false;
+  };
+  
+  const isServerAdmin = hasPermission('ADMIN');
+  const isServerMod = hasPermission('MOD');
   const canTypeInChannel = !isMuted && activeChannel && (activeChannel.server_id == null || activeChannel.can_send !== false);
 
   const sortedCategories = [...categories].sort((a, b) => (a.position || 0) - (b.position || 0) || a.category_id - b.category_id);
@@ -3026,9 +3059,16 @@ function App() {
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      setContextMenu({x: e.pageX, y: e.pageY, user: m.author});
+                      const memberRoles = serverMembers.find(sm => sm.user_id === m.author.user_id)?.server_roles || [];
+                      setContextMenu({x: e.pageX, y: e.pageY, user: m.author, serverRole: memberRoles});
                     }}
-                    style={{cursor: 'pointer'}}
+                    style={{
+                      cursor: 'pointer',
+                      color: (() => {
+                        const member = serverMembers.find(sm => sm.user_id === m.author.user_id);
+                        return member ? getUserHighestRole(member.server_roles, activeServer?.roles || {}).color || 'inherit' : 'inherit';
+                      })()
+                    }}
                   >
                     {renderUsernameWithBadges(m.author)}
                   </span>
@@ -3333,63 +3373,98 @@ function App() {
               </div>
             </>
           ) : (
-            <>
-              <h3 className="member-group-title">Online — {serverMembers.filter(m => isUserOnline(m.user_id, m.username)).length}</h3>
-              {serverMembers.filter(m => isUserOnline(m.user_id, m.username)).map(m => (
-                <div 
-                  key={m.user_id} 
-                  className="member-item" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedProfile({ user: m, rect: e.currentTarget.getBoundingClientRect() });
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setContextMenu({x: e.pageX, y: e.pageY, user: m, serverRole: m.server_role});
-                  }}
-                >
-                  <div className="user-avatar member-avatar">
-                    {getAvatarContent(m)}
-                    <div className="status-indicator online"></div>
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="member-name">{renderUsernameWithBadges(m)}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                      {activeServer?.owner_id === m.user_id ? 'owner' : (m.server_role || 'default')}
-                    </div>
-                  </div>
-                </div>
-              ))}
+            (() => {
+              const serverRoles = activeServer?.roles || {};
+              const onlineMembers = serverMembers.filter(m => isUserOnline(m.user_id, m.username));
+              const offlineMembers = serverMembers.filter(m => !isUserOnline(m.user_id, m.username));
 
-              <h3 className="member-group-title" style={{marginTop: '16px'}}>Offline — {serverMembers.filter(m => !isUserOnline(m.user_id, m.username)).length}</h3>
-              {serverMembers.filter(m => !isUserOnline(m.user_id, m.username)).map(m => (
-                <div 
-                  key={m.user_id} 
-                  className="member-item offline"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedProfile({ user: m, rect: e.currentTarget.getBoundingClientRect() });
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setContextMenu({x: e.pageX, y: e.pageY, user: m, serverRole: m.server_role});
-                  }}
-                >
-                  <div className="user-avatar member-avatar">
-                    {getAvatarContent(m)}
-                    <div className="status-indicator offline"></div>
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="member-name">{renderUsernameWithBadges(m)}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                      {activeServer?.owner_id === m.user_id ? 'owner' : (m.server_role || 'default')}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </>
+              const groups: Record<string, any[]> = {};
+              for (const m of onlineMembers) {
+                const highestRole = activeServer?.owner_id === m.user_id 
+                  ? { id: 'owner', name: 'Server Owner', hierarchy: 9999, color: '' }
+                  : getUserHighestRole(m.server_roles, serverRoles);
+                const key = `${highestRole.hierarchy}_${highestRole.name}`;
+                if (!groups[key]) groups[key] = [];
+                m._highestRole = highestRole;
+                groups[key].push(m);
+              }
+
+              const sortedGroups = Object.entries(groups).sort((a, b) => {
+                const hA = parseInt(a[0].split('_')[0]);
+                const hB = parseInt(b[0].split('_')[0]);
+                return hB - hA;
+              });
+
+              return (
+                <>
+                  {sortedGroups.map(([groupKey, members]) => {
+                    const roleName = groupKey.split('_').slice(1).join('_');
+                    return (
+                      <div key={groupKey}>
+                        <h3 className="member-group-title" style={{marginTop: '16px'}}>{roleName} — {members.length}</h3>
+                        {members.sort((a,b) => (a.display_name || a.username).localeCompare(b.display_name || b.username)).map(m => (
+                          <div 
+                            key={m.user_id} 
+                            className="member-item" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedProfile({ user: m, rect: e.currentTarget.getBoundingClientRect() });
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({x: e.pageX, y: e.pageY, user: m, serverRole: m.server_roles});
+                            }}
+                          >
+                            <div className="user-avatar member-avatar">
+                              {getAvatarContent(m)}
+                              <div className="status-indicator online"></div>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="member-name" style={{ color: m._highestRole?.color || 'inherit' }}>{renderUsernameWithBadges(m)}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+
+                  {offlineMembers.length > 0 && (
+                    <>
+                      <h3 className="member-group-title" style={{marginTop: '16px'}}>Offline — {offlineMembers.length}</h3>
+                      {offlineMembers.sort((a,b) => (a.display_name || a.username).localeCompare(b.display_name || b.username)).map(m => {
+                        const highestRole = activeServer?.owner_id === m.user_id 
+                          ? { id: 'owner', name: 'Server Owner', hierarchy: 9999, color: '' }
+                          : getUserHighestRole(m.server_roles, serverRoles);
+                        return (
+                          <div 
+                            key={m.user_id} 
+                            className="member-item offline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedProfile({ user: m, rect: e.currentTarget.getBoundingClientRect() });
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({x: e.pageX, y: e.pageY, user: m, serverRole: m.server_roles});
+                            }}
+                          >
+                            <div className="user-avatar member-avatar">
+                              {getAvatarContent(m)}
+                              <div className="status-indicator offline"></div>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="member-name" style={{ color: highestRole.color || 'inherit' }}>{renderUsernameWithBadges(m)}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </>
+              );
+            })()
           )}
         </div>
       )}
@@ -3532,19 +3607,29 @@ function App() {
                 {isServerAdmin && (
                   <>
                     <div style={{padding: '6px 8px 2px', fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px'}}>
-                      <Shield size={12} /> Server role
+                      <Shield size={12} /> Server roles
                     </div>
-                    {(['default', 'mod', 'admin'] as const).map(role => (
-                      <button
-                        key={role}
-                        className="dropdown-item"
-                        onClick={() => { setMemberRole(contextMenu.user.user_id, role); setContextMenu(null); }}
-                        style={{ fontWeight: (contextMenu.serverRole || contextMenu.user.server_role || 'default') === role ? 700 : 400 }}
-                      >
-                        {role === 'default' ? 'Default' : role === 'mod' ? 'Mod' : 'Admin'}
-                        {(contextMenu.serverRole || contextMenu.user.server_role || 'default') === role ? ' ✓' : ''}
-                      </button>
-                    ))}
+                    {Object.values(activeServer.roles || {}).sort((a: any, b: any) => b.hierarchy - a.hierarchy).map((roleData: any) => {
+                      const role = roleData.id || Object.keys(activeServer.roles || {}).find(k => activeServer.roles?.[k] === roleData) || 'default';
+                      const userRoles = contextMenu.serverRole || contextMenu.user.server_roles || ['default'];
+                      const hasRole = userRoles.includes(role);
+                      return (
+                        <button
+                          key={role}
+                          className="dropdown-item"
+                          onClick={() => {
+                            const newRoles = hasRole ? userRoles.filter((r: string) => r !== role) : [...userRoles, role];
+                            if (newRoles.length === 0) newRoles.push('default');
+                            setMemberRoles(contextMenu.user.user_id, newRoles);
+                            setContextMenu(null);
+                          }}
+                          style={{ fontWeight: hasRole ? 700 : 400, color: roleData.color || 'inherit' }}
+                        >
+                          {roleData.name}
+                          {hasRole ? ' ✓' : ''}
+                        </button>
+                      );
+                    })}
                   </>
                 )}
                 {isServerMod && activeServer.invite_code !== 'GLOBAL' && (
@@ -3948,6 +4033,105 @@ function App() {
                       disabled={isSavingServer}
                       style={{resize: 'none', height: '80px'}}
                     />
+                  </div>
+                </div>
+                
+                <div style={{width: '100%', marginTop: '24px', borderTop: '1px solid var(--border-subtle)', paddingTop: '24px'}}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <label style={{fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0}}>Roles</label>
+                    <button type="button" className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => {
+                      const newRoleId = 'role_' + Date.now();
+                      setServerRolesSettings({
+                        ...serverRolesSettings,
+                        [newRoleId]: { id: newRoleId, name: 'New Role', color: '#99aab5', hierarchy: Object.keys(serverRolesSettings).length + 1, permissions: [] }
+                      });
+                    }}>
+                      <Plus size={14} style={{ marginRight: '4px' }} /> Add Role
+                    </button>
+                  </div>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {Object.values(serverRolesSettings).sort((a: any, b: any) => b.hierarchy - a.hierarchy).map((role: any) => (
+                      <div key={role.id || role.name} style={{ display: 'flex', gap: '8px', alignItems: 'center', backgroundColor: 'var(--bg-secondary)', padding: '8px', borderRadius: '8px' }}>
+                        <input 
+                          type="color" 
+                          value={role.color || '#99aab5'}
+                          onChange={(e) => {
+                            const updated = { ...role, color: e.target.value };
+                            setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                          }}
+                          style={{ width: '24px', height: '24px', padding: 0, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        />
+                        <input 
+                          className="input" 
+                          value={role.name}
+                          onChange={(e) => {
+                            const updated = { ...role, name: e.target.value };
+                            setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                          }}
+                          style={{ flex: 1, padding: '4px 8px', height: 'auto' }}
+                          placeholder="Role Name"
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Rank:</label>
+                          <input 
+                            type="number"
+                            className="input"
+                            value={role.hierarchy}
+                            onChange={(e) => {
+                              const updated = { ...role, hierarchy: parseInt(e.target.value) || 0 };
+                              setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                            }}
+                            style={{ width: '60px', padding: '4px 8px', height: 'auto' }}
+                          />
+                        </div>
+                        
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={role.permissions?.includes('ADMIN')}
+                            onChange={(e) => {
+                              const perms = role.permissions || [];
+                              const newPerms = e.target.checked ? [...perms, 'ADMIN'] : perms.filter((p: string) => p !== 'ADMIN');
+                              const updated = { ...role, permissions: newPerms };
+                              setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                            }}
+                          />
+                          Admin
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={role.permissions?.includes('MOD')}
+                            onChange={(e) => {
+                              const perms = role.permissions || [];
+                              const newPerms = e.target.checked ? [...perms, 'MOD'] : perms.filter((p: string) => p !== 'MOD');
+                              const updated = { ...role, permissions: newPerms };
+                              setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                            }}
+                          />
+                          Mod
+                        </label>
+                        <button 
+                          type="button" 
+                          className="icon-btn" 
+                          style={{ color: '#ef4444' }}
+                          onClick={() => {
+                            if (!window.confirm(`Delete role ${role.name}?`)) return;
+                            const newRoles = { ...serverRolesSettings };
+                            delete newRoles[role.id];
+                            setServerRolesSettings(newRoles);
+                          }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    {Object.keys(serverRolesSettings).length === 0 && (
+                      <div style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>
+                        No custom roles. Server uses default roles.
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

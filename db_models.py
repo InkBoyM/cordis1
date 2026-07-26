@@ -27,6 +27,7 @@ class DBServer(Base):
     server_banner = Column(String)
     members = Column(JSON)
     member_roles = Column(JSON)
+    roles = Column(JSON)
     folders = Column(Integer)
     channels = Column(Integer)
     invite_code = Column(String, unique=True, index=True)

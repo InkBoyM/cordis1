@@ -123,3 +123,4 @@ On connect, added to list, if list doesn't exist, makes list, and on disconnect,
   ]
 }
 ```
+- **Server Roles**: Added a dynamic role management system per server. Servers can define custom roles with specific names, colors, hierarchy levels, and permissions. Users can be assigned multiple roles, and their highest-ranking role determines their display color, sidebar grouping, and permissions.

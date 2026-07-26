@@ -82,6 +82,7 @@ def startup_event():
 
         for stmt in [
             "ALTER TABLE servers ADD COLUMN member_roles JSON",
+            "ALTER TABLE servers ADD COLUMN roles JSON",
             "ALTER TABLE channels ADD COLUMN category_id INTEGER",
             "ALTER TABLE channels ADD COLUMN position INTEGER DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN view_roles JSON",
@@ -157,7 +158,12 @@ def startup_event():
             )
             db.add(general_channel)
             global_server.channels = 1
-            global_server.member_roles = {str(system_user.user_id): "admin"}
+            global_server.roles = {
+                "admin": {"name": "Admin", "color": "", "hierarchy": 2, "permissions": ["ADMIN"]},
+                "mod": {"name": "Mod", "color": "", "hierarchy": 1, "permissions": ["MOD"]},
+                "default": {"name": "Default", "color": "", "hierarchy": 0, "permissions": []},
+            }
+            global_server.member_roles = {str(system_user.user_id): ["admin"]}
             db.commit()
         else:
             if global_server.server_name == "Global Hub":
@@ -180,36 +186,70 @@ def startup_event():
                 _flag_mod(ch, "view_roles")
                 _flag_mod(ch, "send_roles")
         for srv in db.query(db_models.DBServer).all():
-            if not srv.member_roles:
-                roles = {}
-                for mid in (srv.members or []):
-                    roles[str(mid)] = "admin" if mid == srv.owner_id else "default"
+            changed = False
+            if not srv.roles:
+                srv.roles = {
+                    "admin": {"name": "Admin", "color": "", "hierarchy": 2, "permissions": ["ADMIN"]},
+                    "mod": {"name": "Mod", "color": "", "hierarchy": 1, "permissions": ["MOD"]},
+                    "default": {"name": "Default", "color": "", "hierarchy": 0, "permissions": []},
+                }
+                _flag_mod(srv, "roles")
+                changed = True
+            
+            roles = dict(srv.member_roles or {})
+            mapped = False
+            for mid, role in roles.items():
+                if isinstance(role, str):
+                    roles[mid] = [role]
+                    mapped = True
+            
+            if mapped or not srv.member_roles:
+                if not srv.member_roles:
+                    for mid in (srv.members or []):
+                        roles[str(mid)] = ["admin"] if mid == srv.owner_id else ["default"]
                 srv.member_roles = roles
                 _flag_mod(srv, "member_roles")
+                changed = True
         db.commit()
     finally:
         db.close()
 
-def get_member_role(server: db_models.DBServer, user_id: int) -> str:
+def get_member_roles(server: db_models.DBServer, user_id: int) -> List[str]:
     if not server:
-        return "default"
+        return ["default"]
     if server.owner_id == user_id:
-        return "admin"
+        return ["admin"]
     roles = server.member_roles or {}
-    return roles.get(str(user_id), "default")
+    user_roles = roles.get(str(user_id), ["default"])
+    if isinstance(user_roles, str):
+        return [user_roles]
+    return user_roles
 
-def set_member_role(server: db_models.DBServer, user_id: int, role: str):
+def set_member_roles(server: db_models.DBServer, user_id: int, roles_list: List[str]):
     roles = dict(server.member_roles or {})
-    roles[str(user_id)] = role
+    roles[str(user_id)] = roles_list
     server.member_roles = roles
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(server, "member_roles")
 
+def has_permission(server: db_models.DBServer, user_id: int, perm: str) -> bool:
+    if server.owner_id == user_id:
+        return True
+    user_roles = get_member_roles(server, user_id)
+    server_roles = server.roles or {}
+    for role_id in user_roles:
+        role_data = server_roles.get(role_id, {})
+        if perm in role_data.get("permissions", []):
+            return True
+        if "ADMIN" in role_data.get("permissions", []):
+            return True
+    return False
+
 def can_manage_channels(server: db_models.DBServer, user_id: int) -> bool:
-    return get_member_role(server, user_id) == "admin"
+    return has_permission(server, user_id, "ADMIN")
 
 def can_kick_members(server: db_models.DBServer, user_id: int) -> bool:
-    return get_member_role(server, user_id) in ("mod", "admin")
+    return has_permission(server, user_id, "MOD")
 
 def can_view_channel(channel: db_models.DBChannel, server: Optional[db_models.DBServer], user_id: int) -> bool:
     if channel.server_id is None:
@@ -219,7 +259,8 @@ def can_view_channel(channel: db_models.DBChannel, server: Optional[db_models.DB
     if server.owner_id == user_id:
         return True
     view = channel.view_roles or list(ALL_ROLES)
-    return get_member_role(server, user_id) in view
+    user_roles = get_member_roles(server, user_id)
+    return any(r in view for r in user_roles)
 
 def can_send_in_channel(channel: db_models.DBChannel, server: Optional[db_models.DBServer], user_id: int) -> bool:
     if not can_view_channel(channel, server, user_id):
@@ -229,13 +270,14 @@ def can_send_in_channel(channel: db_models.DBChannel, server: Optional[db_models
     if server and server.owner_id == user_id:
         return True
     send = channel.send_roles or list(ALL_ROLES)
-    return get_member_role(server, user_id) in send
+    user_roles = get_member_roles(server, user_id)
+    return any(r in send for r in user_roles)
 
 def sync_channel_members_from_roles(channel: db_models.DBChannel, server: db_models.DBServer):
     view = channel.view_roles or list(ALL_ROLES)
     members = []
     for mid in (server.members or []):
-        if server.owner_id == mid or get_member_role(server, mid) in view:
+        if server.owner_id == mid or any(r in view for r in get_member_roles(server, mid)):
             members.append(mid)
     channel.members = members
     from sqlalchemy.orm.attributes import flag_modified
@@ -263,7 +305,7 @@ def ensure_user_in_global_hub(user_id: int, db: Session):
         if user_id not in members:
             members.append(user_id)
             global_server.members = members
-            set_member_role(global_server, user_id, "default")
+            set_member_roles(global_server, user_id, ["default"])
             channels = db.query(db_models.DBChannel).filter(db_models.DBChannel.server_id == global_server.server_id).all()
             for channel in channels:
                 if can_view_channel(channel, global_server, user_id):
@@ -1030,12 +1072,13 @@ def server_to_response(server: db_models.DBServer, user_id: int) -> dict:
         "server_banner": server.server_banner,
         "members": server.members or [],
         "member_roles": server.member_roles or {},
+        "roles": server.roles or {},
         "folders": server.folders or 0,
         "channels": server.channels or 0,
         "invite_code": server.invite_code,
         "is_public": server.is_public,
         "owner_id": server.owner_id,
-        "my_role": get_member_role(server, user_id),
+        "my_roles": get_member_roles(server, user_id),
     }
 
 @app.get("/servers/me", response_model=list[models.ServerResponse])
@@ -1191,7 +1234,7 @@ def get_server_members(server_id: int, current_user: db_models.DBUser = Depends(
     result = []
     for u in users:
         data = models.UserResponse.from_orm(u).dict()
-        data["server_role"] = get_member_role(server, u.user_id)
+        data["server_roles"] = get_member_roles(server, u.user_id)
         result.append(data)
     return result
 
@@ -1200,24 +1243,38 @@ def set_server_member_role(server_id: int, user_id: int, body: models.MemberRole
     server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    if server.owner_id != current_user.user_id and get_member_role(server, current_user.user_id) != "admin":
+    if server.owner_id != current_user.user_id and not has_permission(server, current_user.user_id, "ADMIN"):
         raise HTTPException(status_code=403, detail="Only admins can change roles")
     if user_id not in (server.members or []):
         raise HTTPException(status_code=404, detail="User is not a member")
     if user_id == server.owner_id:
         raise HTTPException(status_code=400, detail="Cannot change the owner's role")
-    role = (body.role or "default").lower()
-    if role not in ALL_ROLES:
-        raise HTTPException(status_code=400, detail="Role must be default, mod, or admin")
-    set_member_role(server, user_id, role)
+    server_roles = server.roles or {}
+    for role_id in body.roles:
+        if role_id not in server_roles:
+            raise HTTPException(status_code=400, detail=f"Role {role_id} does not exist in this server")
+    set_member_roles(server, user_id, body.roles)
     channels = db.query(db_models.DBChannel).filter(db_models.DBChannel.server_id == server_id).all()
     for ch in channels:
         sync_channel_members_from_roles(ch, server)
     db.commit()
     user = db.query(db_models.DBUser).filter(db_models.DBUser.user_id == user_id).first()
     data = models.UserResponse.from_orm(user).dict()
-    data["server_role"] = role
+    data["server_roles"] = body.roles
     return data
+
+@app.put("/servers/{server_id}/roles")
+def update_server_roles(server_id: int, body: models.RoleUpdate, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if server.owner_id != current_user.user_id and not has_permission(server, current_user.user_id, "ADMIN"):
+        raise HTTPException(status_code=403, detail="Only admins can update roles")
+    server.roles = body.roles
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(server, "roles")
+    db.commit()
+    return {"status": "success", "roles": server.roles}
 
 @app.post("/servers/{server_id}/members/{user_id}/kick")
 def kick_server_member(server_id: int, user_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1234,8 +1291,13 @@ def kick_server_member(server_id: int, user_id: int, current_user: db_models.DBU
         raise HTTPException(status_code=400, detail="Cannot kick the server owner")
     if user_id == current_user.user_id:
         raise HTTPException(status_code=400, detail="Use leave server instead")
-    actor_rank = {"default": 0, "mod": 1, "admin": 2}[get_member_role(server, current_user.user_id)]
-    target_rank = {"default": 0, "mod": 1, "admin": 2}[get_member_role(server, user_id)]
+    actor_roles = get_member_roles(server, current_user.user_id)
+    target_roles = get_member_roles(server, user_id)
+    server_roles = server.roles or {}
+    
+    actor_rank = max([server_roles.get(r, {}).get("hierarchy", 0) for r in actor_roles] + [-1])
+    target_rank = max([server_roles.get(r, {}).get("hierarchy", 0) for r in target_roles] + [-1])
+    
     if server.owner_id != current_user.user_id and target_rank >= actor_rank:
         raise HTTPException(status_code=403, detail="Cannot kick someone with equal or higher role")
     members = list(server.members)

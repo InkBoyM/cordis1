@@ -102,12 +102,13 @@ class ServerResponse(BaseModel):
     server_banner: Optional[str] = None
     members: List[int]
     member_roles: Optional[dict] = None
+    roles: Optional[dict] = None
     folders: int
     channels: int
     invite_code: Optional[str] = None
     is_public: Optional[bool] = False
     owner_id: int
-    my_role: Optional[str] = None
+    my_roles: Optional[List[str]] = None
 
     class Config:
         from_attributes = True
@@ -123,10 +124,13 @@ class InvitePreview(BaseModel):
     online_members: int
 
 class ServerMemberResponse(UserResponse):
-    server_role: str = "default"
+    server_roles: List[str] = ["default"]
 
 class MemberRoleUpdate(BaseModel):
-    role: str
+    roles: List[str]
+
+class RoleUpdate(BaseModel):
+    roles: dict
 
 class CategoryCreate(BaseModel):
     name: str
