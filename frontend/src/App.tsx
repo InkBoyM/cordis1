@@ -421,7 +421,7 @@ const MessageAttachment = ({ url, onLoad }: { url: string, onLoad?: () => void }
 const DEFAULT_EMOJIS = ["💀", "😭", "❤️", "👍", "👎", "👆"];
 
 function App() {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token] = useState<string | null>(localStorage.getItem('token'));
   const [user, setUser] = useState<any>(null);
   
   // App State
