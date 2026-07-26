@@ -1150,7 +1150,7 @@ function App() {
         const data = await res.json();
         if (res.ok) {
           localStorage.setItem('token', data.access_token);
-          setToken(data.access_token);
+          window.location.reload();
         } else throw new Error(data.detail);
       } else {
         const res = await fetch(`${API_BASE}/register`, {
@@ -1159,7 +1159,7 @@ function App() {
           body: JSON.stringify({ username, password })
         });
         if (res.ok) {
-          setIsLogin(true);
+          window.location.reload();
         } else {
           const data = await res.json();
           throw new Error(data.detail);
@@ -1174,17 +1174,8 @@ function App() {
 
   const logout = () => {
     localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
-    setServers([]);
-    setActiveServer(null);
-    setChannels([]);
-    setActiveChannel(null);
-    setMessages([]);
-    setTypingUsers({});
-    hasAppliedStartupNavRef.current = false;
     if (ws) ws.close();
-    setWs(null);
+    window.location.reload();
   };
 
   const sendMessage = async (e?: React.FormEvent) => {
@@ -2360,7 +2351,7 @@ function App() {
         <AlertTriangle size={64} color="var(--color-danger)" style={{marginBottom: '24px'}} />
         <h1 style={{fontSize: '32px', marginBottom: '16px'}}>Account Suspended</h1>
         <p style={{fontSize: '18px', color: 'var(--text-muted)', marginBottom: '24px'}}>Your account has been permanently banned from Cordis.</p>
-        <button className="btn btn-secondary" onClick={() => { localStorage.removeItem('cordis_token'); setToken(''); setUser(null); }}>Log Out</button>
+        <button className="btn btn-secondary" onClick={logout}>Log Out</button>
       </div>
     );
   }
