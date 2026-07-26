@@ -214,7 +214,7 @@ def startup_event():
     finally:
         db.close()
 
-def get_member_roles(server: db_models.DBServer, user_id: int) -> List[str]:
+def get_member_roles(server: db_models.DBServer, user_id: int) -> list[str]:
     if not server:
         return ["default"]
     if server.owner_id == user_id:
@@ -225,7 +225,7 @@ def get_member_roles(server: db_models.DBServer, user_id: int) -> List[str]:
         return [user_roles]
     return user_roles
 
-def set_member_roles(server: db_models.DBServer, user_id: int, roles_list: List[str]):
+def set_member_roles(server: db_models.DBServer, user_id: int, roles_list: list[str]):
     roles = dict(server.member_roles or {})
     roles[str(user_id)] = roles_list
     server.member_roles = roles
