@@ -575,6 +575,11 @@ function App() {
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [isCreatingChannel, setIsCreatingChannel] = useState(false);
+
+  // Forced Username Change
+  const [forcedNewUsername, setForcedNewUsername] = useState('');
+  const [isChangingForcedUsername, setIsChangingForcedUsername] = useState(false);
+  const [forcedUsernameError, setForcedUsernameError] = useState('');
   
   // Pending invite from URL
   const [pendingInviteCode, setPendingInviteCode] = useState<string | null>(null);
@@ -1803,6 +1808,38 @@ function App() {
     await doAdminSearch(adminSearchUser);
   };
 
+  const handleForcedUsernameChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForcedUsernameError('');
+    if (forcedNewUsername.toLowerCase() === user?.username?.toLowerCase()) {
+      setForcedUsernameError("You must choose a DIFFERENT username.");
+      return;
+    }
+    setIsChangingForcedUsername(true);
+    try {
+      const res = await fetch(`${API_BASE}/users/me`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username: forcedNewUsername })
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setUser(d);
+        setForcedNewUsername('');
+      } else {
+        const d = await res.json();
+        setForcedUsernameError(d.detail || 'Failed to change username');
+      }
+    } catch (err: any) {
+      setForcedUsernameError(err.message);
+    } finally {
+      setIsChangingForcedUsername(false);
+    }
+  };
+
   const handleAdminAction = async (action: string, userId: number, payload?: any) => {
     setAdminLoading(true);
     setAdminMessage('');
@@ -2518,6 +2555,12 @@ function App() {
     <div 
       {...getRootProps()}
       className={`app-layout${isMobile ? ' is-mobile' : ''}${mobileNavOpen ? ' mobile-nav-open' : ''}${membersVisible ? ' members-open' : ''}`}
+      onClick={() => {
+        if (selectedProfile) setSelectedProfile(null);
+        if (showEmojiPicker !== null) setShowEmojiPicker(null);
+        if (showFullEmojiPicker !== null) setShowFullEmojiPicker(null);
+        if (activeMessageId !== null) setActiveMessageId(null);
+      }}
     >
       <input {...getInputProps()} />
       {isDragActive && (
@@ -3531,7 +3574,7 @@ function App() {
                     )}
                     
                     {user.permissions?.includes('SYSTEM_ADMIN') && (
-                      <button className="dropdown-item danger" onClick={() => { handleAdminAction('ban', contextMenu.user.user_id); setContextMenu(null); }}>SYSTEM Ban</button>
+                      <button className="dropdown-item danger" onClick={() => { handleAdminAction('ban', contextMenu.user.user_id); setContextMenu(null); }} disabled={contextMenu.user.username?.toLowerCase() === 'system' || contextMenu.user.user_id === user?.user_id}>SYSTEM Ban</button>
                     )}
                   </>
                 )}
@@ -3821,10 +3864,21 @@ function App() {
                       <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '16px'}}>
                         {user?.permissions?.includes('SYSTEM_ADMIN') && (
                           <>
-                            <button type="button" className="btn btn-secondary" onClick={() => handleAdminAction(adminUserResult.status === 'BANNED' ? 'unban' : 'ban', adminUserResult.user_id)}>{adminUserResult.status === 'BANNED' ? 'Unban' : 'Ban'}</button>
+                            <button type="button" className="btn btn-secondary" onClick={() => handleAdminAction(adminUserResult.status === 'BANNED' ? 'unban' : 'ban', adminUserResult.user_id)} disabled={adminUserResult.username?.toLowerCase() === 'system' || adminUserResult.user_id === user?.user_id}>{adminUserResult.status === 'BANNED' ? 'Unban' : 'Ban'}</button>
                             <button type="button" className="btn btn-secondary" onClick={() => handleAdminAction('promote', adminUserResult.user_id, {role: 'SYSTEM_MOD'})}>Make Mod</button>
                             <button type="button" className="btn btn-secondary" onClick={() => handleAdminAction('promote', adminUserResult.user_id, {role: 'SYSTEM_ADMIN'})}>Make Admin</button>
                             <button type="button" className="btn btn-secondary" onClick={() => handleAdminAction('demote', adminUserResult.user_id)}>Demote</button>
+                            <button type="button" className="btn btn-secondary" onClick={() => {
+                              const newName = window.prompt("Enter new display name:", adminUserResult.display_name);
+                              if (newName && newName !== adminUserResult.display_name) {
+                                handleAdminAction('update_user', adminUserResult.user_id, { display_name: newName });
+                              }
+                            }}>Rename User</button>
+                            <button type="button" className="btn btn-secondary danger" onClick={() => {
+                              if (window.confirm("Flag this user's username? They will be forced to change it.")) {
+                                handleAdminAction('flag_username', adminUserResult.user_id);
+                              }
+                            }} disabled={adminUserResult.username?.toLowerCase() === 'system' || adminUserResult.user_id === user?.user_id}>Flag Username</button>
                           </>
                         )}
                         {(user?.permissions?.includes('SYSTEM_ADMIN') || user?.permissions?.includes('SYSTEM_MOD')) && (
@@ -4108,6 +4162,39 @@ function App() {
           onCancel={handleCropCancel}
           onSave={handleCropSave}
         />
+      )}
+
+      {user?.username_flagged && (
+        <div className="modal-overlay" style={{ zIndex: 9999999, backgroundColor: 'var(--bg-card)' }}>
+          <div className="modal-content">
+            <div className="modal-header">
+              <div className="modal-title">Action Required</div>
+              <div className="modal-desc">Your username has been flagged by a moderator and must be changed before you can continue using Cordis.</div>
+            </div>
+            <form onSubmit={handleForcedUsernameChange}>
+              <div className="modal-body">
+                {forcedUsernameError && <div className="error-message" style={{marginBottom: '12px'}}>{forcedUsernameError}</div>}
+                <div style={{marginBottom: '16px'}}>
+                  <label style={{display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '13px', color: 'var(--text-muted)'}}>New Username</label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={forcedNewUsername}
+                    onChange={e => setForcedNewUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))}
+                    placeholder="Enter new username..."
+                    disabled={isChangingForcedUsername}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="modal-footer" style={{justifyContent: 'flex-end'}}>
+                <button type="submit" className="btn btn-primary" disabled={isChangingForcedUsername || !forcedNewUsername.trim()}>
+                  {isChangingForcedUsername ? <Loader2 size={18} className="spinner" /> : 'Update Username'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

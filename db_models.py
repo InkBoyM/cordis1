@@ -15,6 +15,7 @@ class DBUser(Base):
     banner = Column(String)
     last_active_at = Column(Integer, nullable=True)
     muted_until = Column(Integer, nullable=True)
+    username_flagged = Column(Boolean, default=False)
 
 class DBServer(Base):
     __tablename__ = "servers"

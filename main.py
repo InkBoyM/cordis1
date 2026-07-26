@@ -25,7 +25,16 @@ import httpx
 from bs4 import BeautifulSoup
 import asyncio
 
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
+
 db_models.Base.metadata.create_all(bind=engine)
+
+try:
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN username_flagged BOOLEAN DEFAULT FALSE"))
+except (OperationalError, ProgrammingError):
+    pass
 
 app = FastAPI()
 
@@ -905,6 +914,7 @@ def update_me(update_data: models.UserUpdate, current_user: db_models.DBUser = D
         if existing:
             raise HTTPException(status_code=400, detail="Username already taken.")
         current_user.username = update_data.username
+        current_user.username_flagged = False
     
     if update_data.display_name is not None:
         current_user.display_name = update_data.display_name
@@ -1589,6 +1599,31 @@ def create_dm(dm_data: models.DMCreate, current_user: db_models.DBUser = Depends
     db.refresh(db_channel)
     db_channel.target_user = target_user
     return db_channel
+
+@app.post("/admin/update_user/{user_id}", response_model=models.UserResponse)
+def admin_update_user(user_id: int, update_data: models.AdminUserUpdate, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    if "SYSTEM_ADMIN" not in (current_user.permissions or []) and "SYSTEM_MOD" not in (current_user.permissions or []):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target = db.query(db_models.DBUser).filter(db_models.DBUser.user_id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if update_data.display_name is not None:
+        target.display_name = update_data.display_name
+    db.commit()
+    db.refresh(target)
+    return target
+
+@app.post("/admin/flag_username/{user_id}", response_model=models.UserResponse)
+def admin_flag_username(user_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    if "SYSTEM_ADMIN" not in (current_user.permissions or []) and "SYSTEM_MOD" not in (current_user.permissions or []):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target = db.query(db_models.DBUser).filter(db_models.DBUser.user_id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    target.username_flagged = True
+    db.commit()
+    db.refresh(target)
+    return target
 
 @app.get("/admin/users/{user_id}/servers", response_model=list[models.ServerResponse])
 def get_user_servers_admin(user_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):

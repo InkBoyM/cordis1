@@ -55,6 +55,7 @@ class UserResponse(BaseModel):
     banner: Optional[str] = None
     last_active_at: Optional[int] = None
     muted_until: Optional[int] = None
+    username_flagged: Optional[bool] = False
 
     @model_validator(mode="after")
     def set_system_active(self) -> "UserResponse":
@@ -228,4 +229,7 @@ class MuteRequest(BaseModel):
 
 class PromoteRequest(BaseModel):
     role: str
+
+class AdminUserUpdate(BaseModel):
+    display_name: Optional[str] = None
 
