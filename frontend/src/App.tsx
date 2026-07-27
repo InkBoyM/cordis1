@@ -3382,8 +3382,16 @@ function App() {
           ) : (
             (() => {
               const serverRoles = activeServer?.roles || {};
-              const onlineMembers = serverMembers.filter(m => isUserOnline(m.user_id, m.username));
-              const offlineMembers = serverMembers.filter(m => !isUserOnline(m.user_id, m.username));
+              const visibleMembers = serverMembers.filter(m => {
+                if (activeServer?.owner_id === m.user_id) return true;
+                const viewRoles = (activeChannel?.view_roles && activeChannel.view_roles.length > 0) 
+                  ? activeChannel.view_roles 
+                  : ['default', 'mod', 'admin'];
+                const userRoles = m.server_roles || ['default'];
+                return userRoles.some((r: string) => viewRoles.includes(r));
+              });
+              const onlineMembers = visibleMembers.filter(m => isUserOnline(m.user_id, m.username));
+              const offlineMembers = visibleMembers.filter(m => !isUserOnline(m.user_id, m.username));
 
               const groups: Record<string, any[]> = {};
               for (const m of onlineMembers) {
