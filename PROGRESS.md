@@ -176,7 +176,7 @@ A client connects to a channel's socket at the path:
 `ws://{hostname}/ws/{channel_id}?token={JWT_TOKEN}`
 
 ### The ConnectionManager
-Defined in [main.py](file:///c:/Users/ryanj/KSF/cordis/main.py), the connection manager tracks socket channels:
+Defined in `main.py`, the connection manager tracks socket channels:
 1.  On connection, the backend accepts the socket and tracks it under the channel ID.
 2.  It also tracks the socket under the user's User ID to support multi-device session notifications.
 3.  If this is the user's first active WebSocket connection, the backend broadcasts a presence update.

@@ -87,12 +87,14 @@ class ServerCreate(BaseModel):
     server_image: str
     server_banner: Optional[str] = ""
     is_public: Optional[bool] = False
+    is_verified: Optional[bool] = False
 
 class ServerUpdate(BaseModel):
     server_name: Optional[str] = None
     server_description: Optional[str] = None
     server_image: Optional[str] = None
     server_banner: Optional[str] = None
+    is_verified: Optional[bool] = None
 
 class ServerResponse(BaseModel):
     server_id: int
@@ -107,6 +109,7 @@ class ServerResponse(BaseModel):
     channels: int
     invite_code: Optional[str] = None
     is_public: Optional[bool] = False
+    is_verified: Optional[bool] = False
     owner_id: int
     my_roles: Optional[List[str]] = None
 
@@ -122,6 +125,7 @@ class InvitePreview(BaseModel):
     server_image: str
     total_members: int
     online_members: int
+    is_verified: Optional[bool] = False
 
 class ServerMemberResponse(UserResponse):
     server_roles: List[str] = ["default"]

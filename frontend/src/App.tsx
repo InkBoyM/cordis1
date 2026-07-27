@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Compass, Plus, Hash, LogOut, Send, Loader2, Settings, Users, Home, MessageSquare, Check, X, AlertTriangle, Pencil, Trash2, Reply, File as FileIcon, UploadCloud, Download, Hammer, Play, Pause, Smile, Pin, Sun, Moon, ChevronDown, ChevronRight, FolderPlus, Shield, Menu } from 'lucide-react';
+import { Compass, Plus, Hash, LogOut, Send, Loader2, Settings, Users, Home, MessageSquare, Check, X, AlertTriangle, Pencil, Trash2, Reply, File as FileIcon, UploadCloud, Download, Hammer, Play, Pause, Smile, Pin, Sun, Moon, ChevronDown, ChevronRight, FolderPlus, Shield, Menu, BadgeCheck } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import ImageCropModal from './components/ImageCropModal';
@@ -1889,6 +1889,26 @@ function App() {
     }
   };
 
+  const toggleServerVerification = async (serverId: number) => {
+    try {
+      const res = await fetch(`/admin/flag_server/${serverId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const updatedServer = await res.json();
+        setServers(prev => prev.map(s => s.server_id === serverId ? {...s, is_verified: updatedServer.is_verified} : s));
+        setPublicServers(prev => prev.map(s => s.server_id === serverId ? {...s, is_verified: updatedServer.is_verified} : s));
+        setAdminUserServers(prev => prev.map(s => s.server_id === serverId ? {...s, is_verified: updatedServer.is_verified} : s));
+        if (activeServer && activeServer.server_id === serverId) {
+          setActiveServer((prev: any) => ({...prev, is_verified: updatedServer.is_verified}));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const saveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingSettings(true);
@@ -2155,7 +2175,10 @@ function App() {
                   </div>
                 )}
               </div>
-              <h2 style={{marginBottom: '8px'}}>{invitePreviewData?.server_name}</h2>
+              <h2 style={{marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'}}>
+                {invitePreviewData?.server_name}
+                {invitePreviewData?.is_verified && <span data-tooltip="Verified" style={{display: 'flex'}}><BadgeCheck size={20} color="#3b82f6" /></span>}
+              </h2>
               {invitePreviewData?.server_description && <p style={{color: 'var(--text-muted)', marginBottom: '16px'}}>{invitePreviewData?.server_description}</p>}
               
               <div style={{display: 'flex', justifyContent: 'center', gap: '24px', marginBottom: '24px', marginTop: '16px'}}>
@@ -2430,7 +2453,7 @@ function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', maxWidth: '440px', padding: '16px' }}>
           <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', marginBottom: '8px' }}>
             <h1 style={{ margin: 0, fontSize: '2rem', fontWeight: 800, color: 'var(--text-normal, #dbdee1)' }}>
-              Cordis v1.0.1
+              Cordis v1.0
             </h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted, #949ba4)', fontSize: '0.95rem', flexWrap: 'wrap', justifyContent: 'center' }}>
               <span>made by</span>
@@ -2743,8 +2766,11 @@ function App() {
               <div className="skeleton skeleton-text-short"></div>
             ) : (
               <>
-                <div style={{fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                  {activeServer?.server_name || 'No Server'}
+                <div style={{display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0}}>
+                  <div style={{fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                    {activeServer?.server_name || 'No Server'}
+                  </div>
+                  {activeServer?.is_verified && <span data-tooltip="Verified" style={{display: 'flex', flexShrink: 0}}><BadgeCheck size={16} color="#3b82f6" /></span>}
                 </div>
                 {activeServer && activeServer.invite_code !== 'GLOBAL' && (
                   <button 
@@ -3245,6 +3271,10 @@ function App() {
           </div>
         )}
 
+        <div style={{position: 'absolute', bottom: '10px', right: 'var(--space-4)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 500, pointerEvents: 'none'}}>
+          Cordis v1.1
+        </div>
+
         <div className="chat-input-wrapper">
           {showMentions && getMentionSuggestions().length > 0 && (
             <div className="mention-suggestions-popup">
@@ -3577,9 +3607,15 @@ function App() {
               border: '1px solid var(--border-subtle)',
             }}
           >
-            <div style={{ padding: '4px 8px', fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {serverContextMenu.server.server_name}
+            <div style={{ padding: '4px 8px', fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{serverContextMenu.server.server_name}</div>
+              {serverContextMenu.server.is_verified && <span data-tooltip="Verified" style={{display: 'flex', flexShrink: 0}}><BadgeCheck size={14} color="#3b82f6" /></span>}
             </div>
+            {user?.permissions?.includes('SYSTEM_ADMIN') && (
+              <button className="dropdown-item" onClick={() => { toggleServerVerification(serverContextMenu.server.server_id); setServerContextMenu(null); }}>
+                Toggle Verification
+              </button>
+            )}
             {effectivePinnedServerId === serverContextMenu.server.server_id ? (
               <>
                 <div className="dropdown-item" style={{ cursor: 'default', opacity: 0.75, backgroundColor: 'transparent', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -3769,7 +3805,10 @@ function App() {
                            <div style={{width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--brand-primary)', flexShrink: 0, overflow: 'hidden'}}>
                              {s.server_image ? <img src={getFullUrl(s.server_image)} style={{width: '100%', height: '100%', objectFit: 'cover'}} /> : null}
                            </div>
-                           <h4 style={{margin: 0}}>{s.server_name}</h4>
+                           <h4 style={{margin: 0, display: 'flex', alignItems: 'center', gap: '4px'}}>
+                             {s.server_name}
+                             {s.is_verified && <span data-tooltip="Verified" style={{display: 'flex'}}><BadgeCheck size={16} color="#3b82f6" /></span>}
+                           </h4>
                         </div>
                         <p style={{marginTop: '4px'}}>{s.server_description}</p>
                       </div>
@@ -3946,8 +3985,12 @@ function App() {
                         <>
                           <div className="desc-title" style={{marginTop: '12px'}}>SERVERS JOINED</div>
                           {adminUserServers.map(server => (
-                            <div key={server.server_id} style={{color: '#e5e7eb', fontSize: '0.875rem', marginBottom: '4px'}}>
-                              {server.server_name} <span style={{color: 'var(--text-muted)'}}>(ID: {server.server_id})</span>
+                            <div key={server.server_id} style={{color: '#e5e7eb', fontSize: '0.875rem', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px'}}>
+                              <span style={{display: 'flex', alignItems: 'center', gap: '4px'}}>{server.server_name} {server.is_verified && <span data-tooltip="Verified" style={{display: 'flex'}}><BadgeCheck size={14} color="#3b82f6" /></span>}</span>
+                              <span style={{color: 'var(--text-muted)'}}>(ID: {server.server_id})</span>
+                              {user?.permissions?.includes('SYSTEM_ADMIN') && (
+                                <button type="button" className="btn btn-secondary" style={{padding: '2px 6px', fontSize: '10px'}} onClick={() => toggleServerVerification(server.server_id)}>Toggle Verification</button>
+                              )}
                             </div>
                           ))}
                           <div style={{marginBottom: '16px'}}></div>

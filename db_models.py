@@ -32,6 +32,7 @@ class DBServer(Base):
     channels = Column(Integer)
     invite_code = Column(String, unique=True, index=True)
     is_public = Column(Boolean, default=False)
+    is_verified = Column(Boolean, default=False)
     owner_id = Column(Integer, index=True)
 
 class DBChannelCategory(Base):

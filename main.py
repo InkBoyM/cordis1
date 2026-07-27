@@ -1077,6 +1077,7 @@ def server_to_response(server: db_models.DBServer, user_id: int) -> dict:
         "channels": server.channels or 0,
         "invite_code": server.invite_code,
         "is_public": server.is_public,
+        "is_verified": server.is_verified,
         "owner_id": server.owner_id,
         "my_roles": get_member_roles(server, user_id),
     }
@@ -1347,7 +1348,8 @@ def get_invite_preview(invite_code: str, db: Session = Depends(get_db)):
         "server_description": server.server_description,
         "server_image": server.server_image,
         "total_members": len(server.members),
-        "online_members": online_count
+        "online_members": online_count,
+        "is_verified": server.is_verified
     }
 
 @app.post("/servers/join-by-invite/{invite_code}")
@@ -1683,6 +1685,18 @@ def admin_flag_username(user_id: int, current_user: db_models.DBUser = Depends(g
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     target.username_flagged = True
+    db.commit()
+    db.refresh(target)
+    return target
+
+@app.post("/admin/flag_server/{server_id}", response_model=models.ServerResponse)
+def admin_flag_server(server_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    if "SYSTEM_ADMIN" not in (current_user.permissions or []):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == server_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Server not found")
+    target.is_verified = not target.is_verified
     db.commit()
     db.refresh(target)
     return target
