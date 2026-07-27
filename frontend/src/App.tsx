@@ -1721,8 +1721,11 @@ function App() {
       setServerName(activeServer.server_name);
       setServerDescription(activeServer.server_description || '');
       setServerImage(activeServer.server_image || '');
-      setServerBanner(activeServer.server_banner || '');
-      setServerRolesSettings(JSON.parse(JSON.stringify(activeServer.roles || {})));
+      const rawRoles = JSON.parse(JSON.stringify(activeServer.roles || {}));
+      for (const k in rawRoles) {
+        if (!rawRoles[k].id) rawRoles[k].id = k;
+      }
+      setServerRolesSettings(rawRoles);
       setShowServerSettings(true);
       if (isMobile) setMobileNavOpen(false);
     }
@@ -1953,7 +1956,7 @@ function App() {
         })
       });
       if (res.ok) {
-        await fetch(`${API_BASE}/servers/${activeServer.server_id}/roles`, {
+        const rolesRes = await fetch(`${API_BASE}/servers/${activeServer.server_id}/roles`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -1962,6 +1965,10 @@ function App() {
           body: JSON.stringify({ roles: serverRolesSettings })
         });
         const updated = await res.json();
+        if (rolesRes.ok) {
+          const rolesData = await rolesRes.json();
+          updated.roles = rolesData.roles;
+        }
         setActiveServer(updated);
         setShowServerSettings(false);
         fetchMyServers();
@@ -4051,14 +4058,14 @@ function App() {
                   </div>
                   
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {Object.values(serverRolesSettings).sort((a: any, b: any) => b.hierarchy - a.hierarchy).map((role: any) => (
-                      <div key={role.id || role.name} style={{ display: 'flex', gap: '8px', alignItems: 'center', backgroundColor: 'var(--bg-secondary)', padding: '8px', borderRadius: '8px' }}>
+                    {Object.entries(serverRolesSettings).sort((a: any, b: any) => b[1].hierarchy - a[1].hierarchy).map(([roleId, role]: [string, any]) => (
+                      <div key={roleId} style={{ display: 'flex', gap: '8px', alignItems: 'center', backgroundColor: 'var(--bg-secondary)', padding: '8px', borderRadius: '8px' }}>
                         <input 
                           type="color" 
                           value={role.color || '#99aab5'}
                           onChange={(e) => {
                             const updated = { ...role, color: e.target.value };
-                            setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                            setServerRolesSettings({ ...serverRolesSettings, [roleId]: updated });
                           }}
                           style={{ width: '24px', height: '24px', padding: 0, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                         />
@@ -4067,7 +4074,7 @@ function App() {
                           value={role.name}
                           onChange={(e) => {
                             const updated = { ...role, name: e.target.value };
-                            setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                            setServerRolesSettings({ ...serverRolesSettings, [roleId]: updated });
                           }}
                           style={{ flex: 1, padding: '4px 8px', height: 'auto' }}
                           placeholder="Role Name"
@@ -4080,7 +4087,7 @@ function App() {
                             value={role.hierarchy}
                             onChange={(e) => {
                               const updated = { ...role, hierarchy: parseInt(e.target.value) || 0 };
-                              setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                              setServerRolesSettings({ ...serverRolesSettings, [roleId]: updated });
                             }}
                             style={{ width: '60px', padding: '4px 8px', height: 'auto' }}
                           />
@@ -4094,7 +4101,7 @@ function App() {
                               const perms = role.permissions || [];
                               const newPerms = e.target.checked ? [...perms, 'ADMIN'] : perms.filter((p: string) => p !== 'ADMIN');
                               const updated = { ...role, permissions: newPerms };
-                              setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                              setServerRolesSettings({ ...serverRolesSettings, [roleId]: updated });
                             }}
                           />
                           Admin
@@ -4107,7 +4114,7 @@ function App() {
                               const perms = role.permissions || [];
                               const newPerms = e.target.checked ? [...perms, 'MOD'] : perms.filter((p: string) => p !== 'MOD');
                               const updated = { ...role, permissions: newPerms };
-                              setServerRolesSettings({ ...serverRolesSettings, [role.id]: updated });
+                              setServerRolesSettings({ ...serverRolesSettings, [roleId]: updated });
                             }}
                           />
                           Mod
@@ -4119,7 +4126,7 @@ function App() {
                           onClick={() => {
                             if (!window.confirm(`Delete role ${role.name}?`)) return;
                             const newRoles = { ...serverRolesSettings };
-                            delete newRoles[role.id];
+                            delete newRoles[roleId];
                             setServerRolesSettings(newRoles);
                           }}
                         >
