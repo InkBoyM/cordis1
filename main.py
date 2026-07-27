@@ -83,6 +83,7 @@ def startup_event():
         for stmt in [
             "ALTER TABLE servers ADD COLUMN member_roles JSON",
             "ALTER TABLE servers ADD COLUMN roles JSON",
+            "ALTER TABLE servers ADD COLUMN is_verified BOOLEAN DEFAULT false",
             "ALTER TABLE channels ADD COLUMN category_id INTEGER",
             "ALTER TABLE channels ADD COLUMN position INTEGER DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN view_roles JSON",
