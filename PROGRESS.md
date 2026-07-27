@@ -89,6 +89,7 @@ erDiagram
     *   `channels` (Int): Total channel counting index.
     *   `invite_code` (String, Unique, Indexed): Random string for join actions.
     *   `is_public` (Boolean): Discovery visibility settings.
+    *   `is_verified` (Boolean): Marks the server as verified (shows a blue checkmark badge).
     *   `owner_id` (Int, Indexed): User ID of the server owner.
 
 3.  **Channels (`channels` table)**:
@@ -164,6 +165,9 @@ erDiagram
 *   `POST /api/upload`: Uploads files/images.
     *   **Input (Form-data)**: `file` (Binary), `upload_type` (String choice: `"attachments"`, `"avatars"`, or `"banners"`).
     *   **Returns**: `{"url": "..."}`
+
+### Admin
+*   `POST /admin/flag_server/{server_id}`: Toggles the `is_verified` status of a server. Requires `SYSTEM_ADMIN` or `SYSTEM_MOD` permission.
 
 ---
 
@@ -358,9 +362,11 @@ Builds frontend assets and handles backend uvicorn service execution:
 
 ## 9. Recent Implementations & Changelog
 
-### Version 1.0.1 Updates
+### Version 1.1 Updates
+*   **App-wide Versioning:** Synchronized version numbers to `v1.1` across `package.json` files, the React application UI, and HTML tags, including a new version indicator layered above the chat input box.
+*   **Verified Servers:** System Administrators can flag servers as verified, displaying a native Discord-style blue checkmark tooltip badge next to the server's name across the application UI (headers, sidebars, discover modal, invite preview, etc.).
+*   **Admin Panel:** Implemented a fullscreen Moderator (Admin) Panel allowing admins to search users, view user profiles (including servers joined), and toggle server verification status.
 *   **Performance Optimization:** Memoized the main chat interface's message rendering list. This resolves a critical issue in production where typing in the chat input would cause the UI to freeze due to triggering full re-renders of all rich Markdown messages on every keystroke.
-*   **App-wide Versioning:** Synchronized version numbers to `v1.0.1` across `package.json` files, the React application UI, and HTML tags.
 
 ### Core Features & UI
 *   **Custom Server Roles:** Implemented dynamic role management allowing Server Admins to create, rename, and assign specific hierarchy levels, colors, and permissions to roles. Users can hold multiple roles, with their highest-ranking role dynamically coloring their chat messages and systematically grouping them in the online sidebar members list.

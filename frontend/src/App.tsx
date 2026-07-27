@@ -2453,7 +2453,7 @@ function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', maxWidth: '440px', padding: '16px' }}>
           <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', marginBottom: '8px' }}>
             <h1 style={{ margin: 0, fontSize: '2rem', fontWeight: 800, color: 'var(--text-normal, #dbdee1)' }}>
-              Cordis v1.0
+              Cordis v1.1
             </h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted, #949ba4)', fontSize: '0.95rem', flexWrap: 'wrap', justifyContent: 'center' }}>
               <span>made by</span>
