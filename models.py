@@ -126,6 +126,31 @@ class InvitePreview(BaseModel):
     total_members: int
     online_members: int
     is_verified: Optional[bool] = False
+    expires_at: Optional[int] = None
+    max_uses: Optional[int] = None
+    uses: Optional[int] = None
+    temporary: Optional[bool] = False
+
+class InviteCreate(BaseModel):
+    max_uses: Optional[int] = None
+    expires_in_seconds: Optional[int] = None
+    temporary: bool = False
+
+class InviteResponse(BaseModel):
+    invite_id: int
+    code: str
+    server_id: int
+    creator_id: int
+    max_uses: Optional[int] = None
+    uses: int = 0
+    expires_at: Optional[int] = None
+    temporary: bool = False
+    revoked: bool = False
+    created_at: int
+    is_valid: bool = True
+
+    class Config:
+        from_attributes = True
 
 class ServerMemberResponse(UserResponse):
     server_roles: List[str] = ["default"]
@@ -221,6 +246,30 @@ class MessageSend(BaseModel):
     mentions: List[int] = []
     flags: List[str] = []
     reactions: List[Reaction] = []
+
+class ScheduledMessageCreate(BaseModel):
+    content: MessageContent
+    scheduled_at: int
+    parent_id: int = 0
+    thread_id: int = 0
+    mentions: List[int] = []
+    flags: List[str] = []
+
+class ScheduledMessageResponse(BaseModel):
+    id: int
+    channel_id: int
+    author_id: int
+    content: MessageContent
+    parent_id: int = 0
+    thread_id: int = 0
+    mentions: List[int] = []
+    flags: List[str] = []
+    scheduled_at: int
+    created_at: int
+    status: str
+
+    class Config:
+        from_attributes = True
 
 class UnreadState(BaseModel):
     server_id: Optional[int] = None

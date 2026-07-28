@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Compass, Plus, Hash, LogOut, Send, Loader2, Settings, Users, Home, MessageSquare, Check, X, AlertTriangle, Pencil, Trash2, Reply, File as FileIcon, UploadCloud, Download, Hammer, Play, Pause, Smile, Pin, Sun, Moon, ChevronDown, ChevronRight, FolderPlus, Shield, Menu, BadgeCheck } from 'lucide-react';
+import { Compass, Plus, Hash, LogOut, Send, Loader2, Settings, Users, Home, MessageSquare, Check, X, AlertTriangle, Pencil, Trash2, Reply, File as FileIcon, UploadCloud, Download, Hammer, Play, Pause, Smile, Pin, Sun, Moon, ChevronDown, ChevronRight, FolderPlus, Shield, Menu, BadgeCheck, Clock, Copy, Link2 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import ImageCropModal from './components/ImageCropModal';
@@ -603,6 +603,23 @@ function App() {
   const [invitePreviewError, setInvitePreviewError] = useState('');
   const [isJoiningPreview, setIsJoiningPreview] = useState(false);
 
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleAtLocal, setScheduleAtLocal] = useState('');
+  const [scheduledMessages, setScheduledMessages] = useState<any[]>([]);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
+  const [scheduleSuccess, setScheduleSuccess] = useState('');
+
+  const [showInviteManager, setShowInviteManager] = useState(false);
+  const [serverInvites, setServerInvites] = useState<any[]>([]);
+  const [isLoadingInvites, setIsLoadingInvites] = useState(false);
+  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+  const [inviteCreateError, setInviteCreateError] = useState('');
+  const [inviteCopiedId, setInviteCopiedId] = useState<number | null>(null);
+  const [inviteMaxUses, setInviteMaxUses] = useState<string>('unlimited');
+  const [inviteExpires, setInviteExpires] = useState<string>('never');
+  const [inviteTemporary, setInviteTemporary] = useState(false);
+
   useEffect(() => {
     const path = window.location.pathname;
     if (path.startsWith('/invite/')) {
@@ -1198,6 +1215,27 @@ function App() {
     window.location.reload();
   };
 
+  const uploadAttachmentIfNeeded = async (fileToSend: File | null): Promise<string> => {
+    if (!fileToSend) return '';
+    const formData = new FormData();
+    formData.append('file', fileToSend);
+    formData.append('upload_type', 'attachments');
+    try {
+      const res = await fetch(`${API_BASE}/api/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.url || '';
+      }
+    } catch (err) {
+      console.error('Upload failed', err);
+    }
+    return '';
+  };
+
   const sendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
@@ -1222,26 +1260,7 @@ function App() {
     }
 
     try {
-      let attachedUrl = "";
-      if (fileToSend) {
-        const formData = new FormData();
-        formData.append("file", fileToSend);
-        formData.append("upload_type", "attachments");
-        try {
-          const res = await fetch(`${API_BASE}/api/upload`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
-            body: formData
-          });
-          if (res.ok) {
-            const data = await res.json();
-            attachedUrl = data.url;
-          }
-        } catch (err) {
-          console.error("Upload failed", err);
-        }
-      }
-
+      const attachedUrl = await uploadAttachmentIfNeeded(fileToSend);
       const attachments = attachedUrl ? [attachedUrl] : [];
 
       if (socket.readyState === WebSocket.OPEN) {
@@ -1260,6 +1279,219 @@ function App() {
         setIsSendingMessage(false);
       }, 400);
     }
+  };
+
+  const toDatetimeLocalValue = (date: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
+  const openScheduleModal = async () => {
+    if (!activeChannel || !canTypeInChannel) return;
+    if (!chatInput.trim() && !attachmentFile) {
+      setScheduleError('Type a message (or attach a file) before scheduling.');
+      setShowScheduleModal(true);
+      setScheduleSuccess('');
+      setScheduleAtLocal(toDatetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)));
+      return;
+    }
+    setScheduleError('');
+    setScheduleSuccess('');
+    setScheduleAtLocal(toDatetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)));
+    setShowScheduleModal(true);
+    if (token && activeChannel) {
+      try {
+        const res = await fetch(`${API_BASE}/channels/${activeChannel.channel_id}/scheduled-messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) setScheduledMessages(await res.json());
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const refreshScheduledMessages = async () => {
+    if (!token || !activeChannel) return;
+    try {
+      const res = await fetch(`${API_BASE}/channels/${activeChannel.channel_id}/scheduled-messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setScheduledMessages(await res.json());
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const submitScheduledMessage = async () => {
+    if (!activeChannel || !token) return;
+    if (!chatInput.trim() && !attachmentFile) {
+      setScheduleError('Type a message or attach a file first.');
+      return;
+    }
+    if (!scheduleAtLocal) {
+      setScheduleError('Pick a date and time.');
+      return;
+    }
+    const scheduledAt = Math.floor(new Date(scheduleAtLocal).getTime() / 1000);
+    if (!Number.isFinite(scheduledAt)) {
+      setScheduleError('Invalid date/time.');
+      return;
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (scheduledAt < nowSec + 30) {
+      setScheduleError('Schedule at least 30 seconds in the future.');
+      return;
+    }
+
+    setIsScheduling(true);
+    setScheduleError('');
+    setScheduleSuccess('');
+    try {
+      const attachedUrl = await uploadAttachmentIfNeeded(attachmentFile);
+      const attachments = attachedUrl ? [attachedUrl] : [];
+      const res = await fetch(`${API_BASE}/channels/${activeChannel.channel_id}/scheduled-messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: { text: chatInput, attachments, embeds: [] },
+          scheduled_at: scheduledAt,
+          parent_id: replyingTo?.message_id || 0,
+          mentions: [],
+          flags: [],
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to schedule message');
+      }
+      setChatInput('');
+      setAttachmentFile(null);
+      setAttachmentPreview(null);
+      setReplyingTo(null);
+      if (inputRef.current) {
+        inputRef.current.value = '';
+        inputRef.current.style.height = 'auto';
+      }
+      setScheduleSuccess(`Message scheduled for ${new Date(scheduledAt * 1000).toLocaleString()}`);
+      await refreshScheduledMessages();
+    } catch (err: any) {
+      setScheduleError(err.message || 'Failed to schedule message');
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  const cancelScheduledMessage = async (id: number) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/scheduled-messages/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) await refreshScheduledMessages();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const openInviteManager = async () => {
+    if (!activeServer || activeServer.invite_code === 'GLOBAL') return;
+    setShowInviteManager(true);
+    setInviteCreateError('');
+    setInviteCopiedId(null);
+    setIsLoadingInvites(true);
+    try {
+      const res = await fetch(`${API_BASE}/servers/${activeServer.server_id}/invites`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setServerInvites(await res.json());
+      else setServerInvites([]);
+    } catch {
+      setServerInvites([]);
+    } finally {
+      setIsLoadingInvites(false);
+    }
+  };
+
+  const createServerInvite = async () => {
+    if (!activeServer || !token) return;
+    setIsCreatingInvite(true);
+    setInviteCreateError('');
+    try {
+      const maxUses = inviteMaxUses === 'unlimited' ? null : Number(inviteMaxUses);
+      const expiresMap: Record<string, number | null> = {
+        never: null,
+        '30m': 30 * 60,
+        '1h': 60 * 60,
+        '6h': 6 * 60 * 60,
+        '12h': 12 * 60 * 60,
+        '1d': 24 * 60 * 60,
+        '7d': 7 * 24 * 60 * 60,
+      };
+      const expires_in_seconds = expiresMap[inviteExpires] ?? null;
+      const res = await fetch(`${API_BASE}/servers/${activeServer.server_id}/invites`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          max_uses: maxUses,
+          expires_in_seconds,
+          temporary: inviteTemporary,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to create invite');
+      }
+      const created = await res.json();
+      setServerInvites((prev) => [created, ...prev]);
+      setInviteMaxUses('unlimited');
+      setInviteExpires('never');
+      setInviteTemporary(false);
+    } catch (err: any) {
+      setInviteCreateError(err.message || 'Failed to create invite');
+    } finally {
+      setIsCreatingInvite(false);
+    }
+  };
+
+  const revokeServerInvite = async (inviteId: number) => {
+    if (!activeServer || !token) return;
+    try {
+      const res = await fetch(`${API_BASE}/servers/${activeServer.server_id}/invites/${inviteId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setServerInvites((prev) => prev.filter((i) => i.invite_id !== inviteId));
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const copyInviteLink = async (code: string, inviteId?: number) => {
+    const link = `${window.location.origin}/invite/${code}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      if (inviteId != null) {
+        setInviteCopiedId(inviteId);
+        window.setTimeout(() => setInviteCopiedId(null), 2000);
+      }
+    } catch {
+      window.prompt('Copy invite link:', link);
+    }
+  };
+
+  const formatInviteExpiry = (expiresAt: number | null | undefined) => {
+    if (!expiresAt) return 'Never';
+    return new Date(expiresAt * 1000).toLocaleString();
   };
 
   const handleEditMessageSubmit = (messageId: number, originalAttachments: any[]) => {
@@ -2181,7 +2413,7 @@ function App() {
               </h2>
               {invitePreviewData?.server_description && <p style={{color: 'var(--text-muted)', marginBottom: '16px'}}>{invitePreviewData?.server_description}</p>}
               
-              <div style={{display: 'flex', justifyContent: 'center', gap: '24px', marginBottom: '24px', marginTop: '16px'}}>
+              <div style={{display: 'flex', justifyContent: 'center', gap: '24px', marginBottom: '12px', marginTop: '16px'}}>
                 <div style={{display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem', color: 'var(--text-muted)'}}>
                   <div style={{width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#23a559'}}></div>
                   <strong>{invitePreviewData?.online_members}</strong> Online
@@ -2191,6 +2423,19 @@ function App() {
                   <strong>{invitePreviewData?.total_members}</strong> Members
                 </div>
               </div>
+              {(invitePreviewData?.temporary || invitePreviewData?.expires_at || invitePreviewData?.max_uses != null) && (
+                <div style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                  {invitePreviewData?.temporary && <span>Temporary membership — you leave when you go offline</span>}
+                  {invitePreviewData?.expires_at && (
+                    <span>Expires {new Date(invitePreviewData.expires_at * 1000).toLocaleString()}</span>
+                  )}
+                  {invitePreviewData?.max_uses != null && (
+                    <span>
+                      Uses {invitePreviewData.uses ?? 0}/{invitePreviewData.max_uses}
+                    </span>
+                  )}
+                </div>
+              )}
 
               <div className="modal-actions" style={{flexDirection: 'column', gap: '8px', padding: '0 16px'}}>
                 <button className="btn btn-primary" style={{width: '100%', padding: '12px', justifyContent: 'center'}} disabled={isJoiningPreview} onClick={handleJoinPreview}>
@@ -2231,6 +2476,8 @@ function App() {
       showServerSettings ||
       showCreateChannelModal ||
       showInvitePreview ||
+      showScheduleModal ||
+      showInviteManager ||
       cropRequest !== null;
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2290,6 +2537,18 @@ function App() {
           e.preventDefault();
           e.stopPropagation();
           handleCropCancel();
+          return;
+        }
+        if (showScheduleModal) {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowScheduleModal(false);
+          return;
+        }
+        if (showInviteManager) {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowInviteManager(false);
           return;
         }
         if (showAdminPanel) {
@@ -2415,6 +2674,8 @@ function App() {
     showServerSettings,
     showCreateChannelModal,
     showInvitePreview,
+    showScheduleModal,
+    showInviteManager,
     showEmojiPicker,
     showFullEmojiPicker,
     contextMenu,
@@ -2790,13 +3051,10 @@ function App() {
                       gap: '4px',
                       cursor: 'pointer'
                     }}
-                    onClick={() => {
-                      const inviteLink = `${window.location.origin}/invite/${activeServer.invite_code}`;
-                      navigator.clipboard.writeText(inviteLink);
-                      alert(`Invite link copied to clipboard: ${inviteLink}`);
-                    }}
+                    onClick={() => openInviteManager()}
+                    title="Manage invites"
                   >
-                    <Users size={12} /> Invite
+                    <Link2 size={12} /> Invite
                   </button>
                 )}
               </>
@@ -3345,6 +3603,17 @@ function App() {
               disabled={!canTypeInChannel || !activeChannel || !ws || isSendingMessage}
               rows={1}
             />
+            <button
+              type="button"
+              className="icon-btn"
+              title="Schedule message"
+              aria-label="Schedule message"
+              disabled={!canTypeInChannel || !activeChannel || isSendingMessage || isMuted}
+              onClick={() => openScheduleModal()}
+              style={{ color: showScheduleModal ? 'var(--brand-primary)' : undefined }}
+            >
+              <Clock size={20} />
+            </button>
             <button
               type="button"
               className="icon-btn"
@@ -4210,6 +4479,299 @@ function App() {
       )}
 
       {renderInvitePreviewModal()}
+
+      {showScheduleModal && (
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowScheduleModal(false); }}>
+          <div className="modal-content" style={{ maxWidth: '440px' }}>
+            <div className="modal-header" style={{ position: 'relative' }}>
+              <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={20} /> Schedule Message
+              </div>
+              <div className="modal-desc">
+                Pick when to send your current draft in #{activeChannel?.channel_name || 'channel'}.
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => setShowScheduleModal(false)}
+                style={{ position: 'absolute', top: '16px', right: '16px', color: 'var(--text-muted)' }}
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {(chatInput.trim() || attachmentFile) ? (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-subtle)',
+                  fontSize: '13px',
+                  color: 'var(--text-muted)',
+                  maxHeight: '80px',
+                  overflow: 'hidden',
+                }}>
+                  <div style={{ color: 'var(--text-primary)', marginBottom: '4px', fontWeight: 600 }}>Draft</div>
+                  {chatInput.trim() ? (
+                    <div style={{ whiteSpace: 'pre-wrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {chatInput.length > 160 ? chatInput.slice(0, 160) + '…' : chatInput}
+                    </div>
+                  ) : (
+                    <div>Attachment: {attachmentFile?.name}</div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                  Type a message in the chat box first, then open this again.
+                </div>
+              )}
+              <label style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                Send at
+                <input
+                  type="datetime-local"
+                  className="input"
+                  value={scheduleAtLocal}
+                  onChange={(e) => setScheduleAtLocal(e.target.value)}
+                  disabled={isScheduling}
+                />
+              </label>
+              {scheduleError && <div className="error-msg">{scheduleError}</div>}
+              {scheduleSuccess && (
+                <div style={{ fontSize: '13px', color: '#23a559', fontWeight: 500 }}>{scheduleSuccess}</div>
+              )}
+              {scheduledMessages.length > 0 && (
+                <div style={{ marginTop: '4px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>
+                    Pending in this channel
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '160px', overflowY: 'auto' }}>
+                    {scheduledMessages.map((s) => (
+                      <div
+                        key={s.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          padding: '8px 10px',
+                          borderRadius: '6px',
+                          background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border-subtle)',
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: '12px', color: 'var(--brand-primary)', fontWeight: 600 }}>
+                            {new Date(s.scheduled_at * 1000).toLocaleString()}
+                          </div>
+                          <div style={{ fontSize: '13px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {s.content?.text || (s.content?.attachments?.length ? '[attachment]' : '(empty)')}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          title="Cancel scheduled message"
+                          onClick={() => cancelScheduledMessage(s.id)}
+                          style={{ flexShrink: 0 }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer" style={{ marginTop: '12px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowScheduleModal(false)} disabled={isScheduling}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn"
+                style={{ minWidth: '120px' }}
+                disabled={isScheduling || (!chatInput.trim() && !attachmentFile)}
+                onClick={() => submitScheduledMessage()}
+              >
+                {isScheduling ? <Loader2 size={18} className="spinner" /> : 'Schedule'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showInviteManager && activeServer && (
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowInviteManager(false); }}>
+          <div className="modal-content" style={{ maxWidth: '520px' }}>
+            <div className="modal-header" style={{ position: 'relative' }}>
+              <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Link2 size={20} /> Server Invites
+              </div>
+              <div className="modal-desc">
+                Create links with expiry, use limits, and temporary membership for {activeServer.server_name}.
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => setShowInviteManager(false)}
+                style={{ position: 'absolute', top: '16px', right: '16px', color: 'var(--text-muted)' }}
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '10px',
+                padding: '12px',
+                borderRadius: '8px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  Max uses
+                  <select className="input" value={inviteMaxUses} onChange={(e) => setInviteMaxUses(e.target.value)} disabled={isCreatingInvite}>
+                    <option value="unlimited">Unlimited</option>
+                    <option value="1">1 use</option>
+                    <option value="5">5 uses</option>
+                    <option value="10">10 uses</option>
+                    <option value="25">25 uses</option>
+                    <option value="50">50 uses</option>
+                    <option value="100">100 uses</option>
+                  </select>
+                </label>
+                <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  Expires after
+                  <select className="input" value={inviteExpires} onChange={(e) => setInviteExpires(e.target.value)} disabled={isCreatingInvite}>
+                    <option value="never">Never</option>
+                    <option value="30m">30 minutes</option>
+                    <option value="1h">1 hour</option>
+                    <option value="6h">6 hours</option>
+                    <option value="12h">12 hours</option>
+                    <option value="1d">1 day</option>
+                    <option value="7d">7 days</option>
+                  </select>
+                </label>
+                <label style={{
+                  gridColumn: '1 / -1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '13px',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={inviteTemporary}
+                    onChange={(e) => setInviteTemporary(e.target.checked)}
+                    disabled={isCreatingInvite}
+                  />
+                  Temporary membership (leave when offline)
+                </label>
+                {inviteCreateError && <div className="error-msg" style={{ gridColumn: '1 / -1' }}>{inviteCreateError}</div>}
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ gridColumn: '1 / -1' }}
+                  onClick={() => createServerInvite()}
+                  disabled={isCreatingInvite}
+                >
+                  {isCreatingInvite ? <Loader2 size={18} className="spinner" /> : 'Create Invite'}
+                </button>
+              </div>
+
+              {activeServer.invite_code && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-panel)',
+                }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>Default server code</div>
+                    <div style={{ fontSize: '13px', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {activeServer.invite_code}
+                    </div>
+                  </div>
+                  <button type="button" className="btn btn-secondary" style={{ flexShrink: 0 }} onClick={() => copyInviteLink(activeServer.invite_code)}>
+                    <Copy size={14} /> Copy
+                  </button>
+                </div>
+              )}
+
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>
+                  Active invites
+                </div>
+                {isLoadingInvites ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
+                    <Loader2 size={20} className="spinner" />
+                  </div>
+                ) : serverInvites.length === 0 ? (
+                  <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No invites yet — create one above.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
+                    {serverInvites.map((inv) => (
+                      <div
+                        key={inv.invite_id}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-subtle)',
+                          background: inv.is_valid ? 'var(--bg-secondary)' : 'rgba(242, 63, 67, 0.08)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: '14px' }}>{inv.code}</div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                              <span>
+                                Uses: {inv.uses}{inv.max_uses != null ? ` / ${inv.max_uses}` : ' / ∞'}
+                              </span>
+                              <span>Expires: {formatInviteExpiry(inv.expires_at)}</span>
+                              {inv.temporary && <span style={{ color: 'var(--brand-primary)' }}>Temporary</span>}
+                              {!inv.is_valid && <span style={{ color: '#f23f43' }}>Expired / full</span>}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="Copy link"
+                              onClick={() => copyInviteLink(inv.code, inv.invite_id)}
+                            >
+                              {inviteCopiedId === inv.invite_id ? <Check size={16} /> : <Copy size={16} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="Revoke invite"
+                              onClick={() => revokeServerInvite(inv.invite_id)}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowInviteManager(false)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Channel Modal */}
       {showCreateChannelModal && (
