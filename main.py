@@ -1506,6 +1506,7 @@ def get_server_members(server_id: int, current_user: db_models.DBUser = Depends(
     result = []
     for u in users:
         data = models.UserResponse.from_orm(u).dict()
+        data["discord_id"] = u.discord_id
         data["server_roles"] = get_member_roles(server, u.user_id)
         result.append(data)
     return result
