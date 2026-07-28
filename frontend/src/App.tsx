@@ -556,6 +556,7 @@ function App() {
   const [settingsUsername, setSettingsUsername] = useState('');
   const [settingsDisplayName, setSettingsDisplayName] = useState('');
   const [settingsDescription, setSettingsDescription] = useState('');
+  const [settingsDiscordId, setSettingsDiscordId] = useState('');
   const [settingsProfilePic, setSettingsProfilePic] = useState('');
   const [settingsBanner, setSettingsBanner] = useState('');
   const [settingsProfilePicFile, setSettingsProfilePicFile] = useState<File | null>(null);
@@ -663,6 +664,112 @@ function App() {
     return userId ? !!onlineUsers[userId] : false;
   };
   const [selectedProfile, setSelectedProfile] = useState<{user: any, rect: DOMRect} | null>(null);
+  
+  // Lanyard Presence
+  const [lanyardData, setLanyardData] = useState<Record<string, any>>({});
+  const lanyardWsRef = useRef<WebSocket | null>(null);
+  const lanyardHeartbeatIntervalRef = useRef<number | null>(null);
+  const lanyardTargetIdsRef = useRef<string[]>([]);
+  const [lanyardNotInServer, setLanyardNotInServer] = useState(false);
+
+  useEffect(() => {
+    if (user?.discord_id) {
+      fetch(`https://api.lanyard.rest/v1/users/${user.discord_id}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!data.success && data.error?.code === 'user_not_monitored') {
+            setLanyardNotInServer(true);
+          } else {
+            setLanyardNotInServer(false);
+          }
+        })
+        .catch(() => {});
+    } else {
+      setLanyardNotInServer(false);
+    }
+  }, [user?.discord_id]);
+
+  const renderLanyardPresenceInProfile = (u: any) => {
+    if (!u?.discord_id) return null;
+    
+    // Show prompt if it's the current user and they aren't in the server
+    if (user && u.user_id === user.user_id && lanyardNotInServer) {
+      return (
+        <div className="lanyard-profile-card error">
+          <div className="desc-title">DISCORD PRESENCE ERROR</div>
+          <p style={{fontSize: '0.85rem', color: '#e5e7eb'}}>To show your Discord presence, join the <a href="https://discord.gg/UrXF2cfJ7F" target="_blank" rel="noreferrer" style={{color: 'var(--brand-primary)'}}>Lanyard Discord</a>.</p>
+        </div>
+      );
+    }
+
+    const presence = lanyardData[u.discord_id];
+    if (!presence) return null;
+    
+    const activities = presence.activities || [];
+    const customStatus = activities.find((a: any) => a.type === 4);
+    const otherActivities = activities.filter((a: any) => a.type !== 4);
+
+    if (!customStatus && otherActivities.length === 0) return null;
+
+    return (
+      <div className="lanyard-profile-cards">
+        {customStatus && (
+          <div className="lanyard-custom-status">
+            {customStatus.emoji?.id ? (
+              <img src={`https://cdn.discordapp.com/emojis/${customStatus.emoji.id}.webp`} alt="emoji" className="lanyard-emoji" />
+            ) : customStatus.emoji?.name ? (
+              <span className="lanyard-emoji">{customStatus.emoji.name}</span>
+            ) : null}
+            <span>{customStatus.state}</span>
+          </div>
+        )}
+        {otherActivities.map((activity: any, idx: number) => {
+          let imageUrl = '';
+          if (activity.assets?.large_image) {
+            if (activity.assets.large_image.startsWith('mp:external')) {
+              imageUrl = activity.assets.large_image.replace('mp:external/', 'https://media.discordapp.net/external/');
+            } else {
+              imageUrl = `https://cdn.discordapp.com/app-assets/${activity.application_id}/${activity.assets.large_image}.png`;
+            }
+          } else if (activity.name === 'Spotify' && presence.spotify) {
+            imageUrl = presence.spotify.album_art_url;
+          }
+          
+          return (
+            <div key={idx} className="lanyard-profile-card activity">
+              <div className="desc-title" style={{marginBottom: '8px'}}>{activity.type === 2 ? 'LISTENING TO' : 'PLAYING A GAME'}</div>
+              <div className="lanyard-activity-body">
+                {imageUrl && <img src={imageUrl} alt="Asset" className="lanyard-activity-img" />}
+                <div className="lanyard-activity-info">
+                  <div className="lanyard-activity-name">{activity.name}</div>
+                  {activity.details && <div className="lanyard-activity-details">{activity.details}</div>}
+                  {activity.state && <div className="lanyard-activity-state">{activity.state}</div>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderLanyardStatusInList = (u: any) => {
+    if (!u?.discord_id) return null;
+    const presence = lanyardData[u.discord_id];
+    if (!presence) return null;
+    
+    const gameStatus = presence.activities?.find((a: any) => a.type !== 4);
+    const customStatus = presence.activities?.find((a: any) => a.type === 4);
+    
+    if (gameStatus) {
+      return <div className="lanyard-list-status">Playing <strong>{gameStatus.name}</strong></div>;
+    }
+    if (customStatus) {
+      return <div className="lanyard-list-status">{customStatus.emoji?.name} {customStatus.state}</div>;
+    }
+    return null;
+  };
+
   const [contextMenu, setContextMenu] = useState<{x: number, y: number, user: any, serverRole?: string} | null>(null);
   const [revealedMessages, setRevealedMessages] = useState<Record<number, any>>({});
   const [msgContextMenu, setMsgContextMenu] = useState<{x: number, y: number, message: any} | null>(null);
@@ -675,6 +782,73 @@ function App() {
   );
   const [mobileMembersOpen, setMobileMembersOpen] = useState(false);
   const [activeMessageId, setActiveMessageId] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Collect all discord IDs from server members, DMs, and current user
+    const discordIds = new Set<string>();
+    if (user?.discord_id) discordIds.add(user.discord_id);
+    serverMembers.forEach(m => {
+      if (m.discord_id) discordIds.add(m.discord_id);
+    });
+    channels.filter(c => c.channel_type === 'DM').forEach(c => {
+      if (c.target_user?.discord_id) discordIds.add(c.target_user.discord_id);
+    });
+
+    const targetIds = Array.from(discordIds);
+    lanyardTargetIdsRef.current = targetIds;
+    
+    if (targetIds.length === 0) {
+      if (lanyardWsRef.current) {
+        lanyardWsRef.current.close();
+        lanyardWsRef.current = null;
+      }
+      return;
+    }
+
+    if (!lanyardWsRef.current || lanyardWsRef.current.readyState === WebSocket.CLOSED) {
+      const ws = new WebSocket('wss://api.lanyard.rest/socket');
+      lanyardWsRef.current = ws;
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ op: 2, d: { subscribe_to_ids: lanyardTargetIdsRef.current } }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.op === 1) { // Hello
+            const interval = data.d.heartbeat_interval;
+            if (lanyardHeartbeatIntervalRef.current) clearInterval(lanyardHeartbeatIntervalRef.current);
+            lanyardHeartbeatIntervalRef.current = window.setInterval(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ op: 3 }));
+              }
+            }, interval);
+          } else if (data.op === 0) {
+            if (data.t === 'INIT_STATE') {
+              setLanyardData(data.d);
+            } else if (data.t === 'PRESENCE_UPDATE') {
+              setLanyardData(prev => ({ ...prev, [data.d.discord_user.id]: data.d }));
+            }
+          }
+        } catch (e) {
+          console.error("Lanyard error:", e);
+        }
+      };
+
+      ws.onclose = () => {
+        if (lanyardHeartbeatIntervalRef.current) clearInterval(lanyardHeartbeatIntervalRef.current);
+        lanyardWsRef.current = null;
+      };
+    } else if (lanyardWsRef.current.readyState === WebSocket.OPEN) {
+      // Re-subscribe if the connection is already open but we have new IDs
+      lanyardWsRef.current.send(JSON.stringify({ op: 2, d: { subscribe_to_ids: targetIds } }));
+    }
+
+    return () => {
+      // Cleanup happens when component unmounts, not on every re-render, to avoid flapping the socket
+    };
+  }, [user?.discord_id, serverMembers, channels]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
@@ -1933,6 +2107,7 @@ function App() {
       setSettingsUsername(user.username);
       setSettingsDisplayName(user.display_name || user.username);
       setSettingsDescription(user.description || '');
+      setSettingsDiscordId(user.discord_id || '');
       setSettingsProfilePic(user.profile_picture || '');
       setSettingsBanner(user.banner || '');
       setShowSettings(true);
@@ -2164,6 +2339,7 @@ function App() {
           username: settingsUsername,
           display_name: settingsDisplayName,
           description: settingsDescription,
+          discord_id: settingsDiscordId,
           profile_picture: finalProfilePic,
           banner: finalBanner
         })
@@ -3207,7 +3383,14 @@ function App() {
             </div>
             <div className="user-info">
               <div className="user-name">{renderUsernameWithBadges(user)}</div>
-              <div className="user-status-text">Online</div>
+              <div className="user-status-text" style={{display: 'flex', alignItems: 'center', gap: '4px'}}>
+                Online
+                {user.discord_id && lanyardNotInServer && (
+                  <span title="Not in Lanyard Discord" style={{display: 'flex', cursor: 'help'}}>
+                    <AlertTriangle size={12} color="var(--status-dnd)" />
+                  </span>
+                )}
+              </div>
             </div>
             <div className="user-actions">
               <button className="icon-btn" onClick={openSettings} title="User Settings"><Settings size={18} /></button>
@@ -3656,7 +3839,10 @@ function App() {
                   {getAvatarContent(activeChannel.target_user)}
                   <div className={`status-indicator ${isUserOnline(activeChannel.target_user?.user_id, activeChannel.target_user?.username) ? 'online' : 'offline'}`}></div>
                 </div>
-                <span className="member-name">{renderUsernameWithBadges(activeChannel.target_user)}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="member-name">{renderUsernameWithBadges(activeChannel.target_user)}</div>
+                  {renderLanyardStatusInList(activeChannel.target_user)}
+                </div>
               </div>
               
               <div 
@@ -3675,7 +3861,10 @@ function App() {
                   {getAvatarContent(user)}
                   <div className="status-indicator online"></div>
                 </div>
-                <span className="member-name">{renderUsernameWithBadges(user)}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="member-name">{renderUsernameWithBadges(user)}</div>
+                  {renderLanyardStatusInList(user)}
+                </div>
               </div>
             </>
           ) : (
@@ -3736,6 +3925,7 @@ function App() {
                             </div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div className="member-name" style={{ color: m._highestRole?.color || 'inherit' }}>{renderUsernameWithBadges(m)}</div>
+                              {renderLanyardStatusInList(m)}
                             </div>
                           </div>
                         ))}
@@ -3770,6 +3960,7 @@ function App() {
                             </div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div className="member-name" style={{ color: highestRole.color || 'inherit' }}>{renderUsernameWithBadges(m)}</div>
+                              {renderLanyardStatusInList(m)}
                             </div>
                           </div>
                         );
@@ -3842,6 +4033,7 @@ function App() {
             <p style={{color: '#e5e7eb', fontSize: '0.875rem', marginBottom: '16px'}}>
               {formatLastActive(selectedProfile.user.last_active_at, isUserOnline(selectedProfile.user.user_id, selectedProfile.user.username))}
             </p>
+            {renderLanyardPresenceInProfile(selectedProfile.user)}
             {user && selectedProfile.user.user_id !== user.user_id && (
               <button 
                 className="btn" 
@@ -4183,6 +4375,15 @@ function App() {
                       style={{resize: 'none', height: '80px'}}
                     />
                   </div>
+                </div>
+                <div className="form-group">
+                  <label>Discord ID (for Lanyard Rich Presence)</label>
+                  <input className="input" value={settingsDiscordId} onChange={e => setSettingsDiscordId(e.target.value)} disabled={isSavingSettings} placeholder="e.g. 123456789012345678" />
+                  {lanyardNotInServer && settingsDiscordId === user?.discord_id && (
+                    <div style={{color: 'var(--status-dnd)', fontSize: '12px', marginTop: '4px'}}>
+                      To show your Discord presence, you must join the <a href="https://discord.gg/UrXF2cfJ7F" target="_blank" rel="noreferrer" style={{color: 'var(--status-dnd)', textDecoration: 'underline'}}>Lanyard Discord</a>.
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="modal-footer">

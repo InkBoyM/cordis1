@@ -16,6 +16,7 @@ class DBUser(Base):
     last_active_at = Column(Integer, nullable=True)
     muted_until = Column(Integer, nullable=True)
     username_flagged = Column(Boolean, default=False)
+    discord_id = Column(String, nullable=True)
 
 class DBServer(Base):
     __tablename__ = "servers"

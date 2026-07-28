@@ -93,6 +93,7 @@ def startup_event():
             "ALTER TABLE channels ADD COLUMN position INTEGER DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN view_roles JSON",
             "ALTER TABLE channels ADD COLUMN send_roles JSON",
+            "ALTER TABLE users ADD COLUMN discord_id VARCHAR",
         ]:
             try:
                 from sqlalchemy import text
@@ -1233,6 +1234,9 @@ def update_me(update_data: models.UserUpdate, current_user: db_models.DBUser = D
         if current_user.banner and current_user.banner != update_data.banner:
             storage.delete_file(current_user.banner)
         current_user.banner = update_data.banner
+        
+    if update_data.discord_id is not None:
+        current_user.discord_id = update_data.discord_id
         
     db.commit()
     db.refresh(current_user)

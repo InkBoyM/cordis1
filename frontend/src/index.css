@@ -1770,3 +1770,88 @@ h1, h2, h3, h4, h5, h6 {
     max-height: 95vh;
   }
 }
+/* Lanyard Rich Presence Styles */
+.lanyard-list-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.lanyard-list-status strong {
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.lanyard-profile-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.lanyard-custom-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-normal);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.lanyard-emoji {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.lanyard-profile-card {
+  background-color: var(--bg-modifier-hover);
+  border-radius: 8px;
+  padding: 12px;
+}
+.lanyard-profile-card.error {
+  border: 1px solid var(--status-dnd);
+  background-color: rgba(240, 71, 71, 0.1);
+  margin-bottom: 16px;
+}
+
+.lanyard-activity-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lanyard-activity-img {
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.lanyard-activity-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.lanyard-activity-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lanyard-activity-details,
+.lanyard-activity-state {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

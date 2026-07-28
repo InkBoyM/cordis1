@@ -6,6 +6,7 @@
 - **Admin Panel UI**: The Moderator (Admin) Panel is now rendered as a fullscreen overlay rather than a fixed-width popup. The search bar is constrained in width for better UX on ultrawide displays, and the user result card now mimics the styling and layout of a standard profile popover, including rendering the user's joined servers.
 - **Login Homepage UI**: Added "Cordis v1.1" title and "made by KillSecurly (logo), a project of LVMLabs (logo)" branding above the warning block for unauthenticated users. The warning block title has been changed from "Cordis v1.0" to "Warning".
 - **Member Sidebar Visibility**: The server member list sidebar is now dynamically filtered to only display users who have permission to view the currently active channel, based on the channel's required roles.
+- **Discord Lanyard Rich Presence**: Users can link their Discord ID in User Settings. Real-time rich presence (playing games, spotify, custom status) via the Lanyard WebSocket API is then displayed prominently under their name in the member list and in a dedicated card on their profile popover. If a linked user is not in the Lanyard discord server, a prompt to join is displayed on their own profile.
 
 
 # Backend

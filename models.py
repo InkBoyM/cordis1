@@ -56,6 +56,7 @@ class UserResponse(BaseModel):
     last_active_at: Optional[int] = None
     muted_until: Optional[int] = None
     username_flagged: Optional[bool] = False
+    discord_id: Optional[str] = None
 
     @model_validator(mode="after")
     def set_system_active(self) -> "UserResponse":
@@ -73,6 +74,7 @@ class UserUpdate(BaseModel):
     description: Optional[str] = None
     profile_picture: Optional[str] = None
     banner: Optional[str] = None
+    discord_id: Optional[str] = None
 
     class Config:
         from_attributes = True
