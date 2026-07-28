@@ -53,6 +53,11 @@ def is_system_user(user_id: int, db: Session = None) -> bool:
     return False
 
 @app.on_event("startup")
+async def start_background_workers():
+    asyncio.create_task(scheduled_message_worker())
+
+
+@app.on_event("startup")
 def startup_event():
     global SYSTEM_USER_ID
     db = next(get_db())
@@ -359,8 +364,254 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     update_user_activity(user.user_id, db)
     return user
 
-def generate_invite_code(length=6):
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+def generate_invite_code(length=8, db: Session = None):
+    for _ in range(50):
+        code = ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+        if db is None:
+            return code
+        legacy = db.query(db_models.DBServer).filter(db_models.DBServer.invite_code == code).first()
+        modern = db.query(db_models.DBServerInvite).filter(db_models.DBServerInvite.code == code).first()
+        if not legacy and not modern:
+            return code
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length + 4))
+
+
+def invite_is_valid(inv: db_models.DBServerInvite) -> bool:
+    if not inv or inv.revoked:
+        return False
+    now = int(time.time())
+    if inv.expires_at is not None and inv.expires_at <= now:
+        return False
+    if inv.max_uses is not None and (inv.uses or 0) >= inv.max_uses:
+        return False
+    return True
+
+
+def invite_to_response(inv: db_models.DBServerInvite) -> dict:
+    return {
+        "invite_id": inv.invite_id,
+        "code": inv.code,
+        "server_id": inv.server_id,
+        "creator_id": inv.creator_id,
+        "max_uses": inv.max_uses,
+        "uses": inv.uses or 0,
+        "expires_at": inv.expires_at,
+        "temporary": bool(inv.temporary),
+        "revoked": bool(inv.revoked),
+        "created_at": inv.created_at,
+        "is_valid": invite_is_valid(inv),
+    }
+
+
+def resolve_invite(code: str, db: Session):
+    if not code:
+        return None, None
+    inv = db.query(db_models.DBServerInvite).filter(db_models.DBServerInvite.code == code).first()
+    if inv:
+        server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == inv.server_id).first()
+        return server, inv
+    server = db.query(db_models.DBServer).filter(db_models.DBServer.invite_code == code).first()
+    return server, None
+
+
+def remove_user_from_server(server: db_models.DBServer, user_id: int, db: Session):
+    if not server or server.invite_code == "GLOBAL":
+        return
+    if server.owner_id == user_id:
+        return
+    members = list(server.members or [])
+    if user_id not in members:
+        return
+    members.remove(user_id)
+    server.members = members
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(server, "members")
+    roles = dict(server.member_roles or {})
+    if str(user_id) in roles:
+        roles.pop(str(user_id), None)
+        server.member_roles = roles
+        flag_modified(server, "member_roles")
+    channels = db.query(db_models.DBChannel).filter(db_models.DBChannel.server_id == server.server_id).all()
+    for channel in channels:
+        ch_members = list(channel.members or [])
+        if user_id in ch_members:
+            ch_members.remove(user_id)
+            channel.members = ch_members
+            flag_modified(channel, "members")
+
+
+def purge_temporary_memberships(user_id: int, db: Session):
+    temps = db.query(db_models.DBTemporaryMember).filter(
+        db_models.DBTemporaryMember.user_id == user_id
+    ).all()
+    for temp in temps:
+        server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == temp.server_id).first()
+        if server:
+            remove_user_from_server(server, user_id, db)
+        db.delete(temp)
+    if temps:
+        db.commit()
+
+
+def parse_mentions_for_text(text: str, parent_id: int, mentions: list, db: Session) -> list:
+    current_mentions = set(mentions or [])
+    if text:
+        mentioned_usernames = re.findall(r'@([a-zA-Z0-9_]+)', text)
+        if mentioned_usernames:
+            mentioned_users = db.query(db_models.DBUser).filter(db_models.DBUser.username.in_(mentioned_usernames)).all()
+            current_mentions.update(u.user_id for u in mentioned_users)
+    if parent_id and parent_id != 0:
+        parent_msg = db.query(db_models.DBMessage).filter(db_models.DBMessage.message_id == parent_id).first()
+        if parent_msg and parent_msg.author_id:
+            current_mentions.add(parent_msg.author_id)
+    return list(current_mentions)
+
+
+async def deliver_channel_message(
+    channel: db_models.DBChannel,
+    user: db_models.DBUser,
+    content: dict,
+    parent_id: int,
+    thread_id: int,
+    mentions: list,
+    flags: list,
+    message_type: str,
+    db: Session,
+):
+    mentions = parse_mentions_for_text(
+        (content or {}).get("text") or "",
+        parent_id or 0,
+        mentions or [],
+        db,
+    )
+    timestamp = int(time.time())
+    db_msg = db_models.DBMessage(
+        channel_id=channel.channel_id,
+        author_id=user.user_id,
+        content=content,
+        mentions=mentions,
+        flags=flags or [],
+        reactions=[],
+        created_at=timestamp,
+        modified_at=timestamp,
+        message_type=message_type or "DEFAULT",
+        parent_id=parent_id or 0,
+        thread_id=thread_id or 0,
+    )
+    db.add(db_msg)
+    db.commit()
+    db.refresh(db_msg)
+    msg_id = db_msg.message_id
+
+    broadcast_msg = {
+        "message_id": msg_id,
+        "channel_id": channel.channel_id,
+        "server_id": channel.server_id,
+        "author_id": user.user_id,
+        "author": models.UserResponse.from_orm(user).dict(),
+        "content": content,
+        "created_at": timestamp,
+        "modified_at": timestamp,
+        "message_type": message_type or "DEFAULT",
+        "parent_id": parent_id or 0,
+        "thread_id": thread_id or 0,
+        "mentions": mentions,
+        "flags": flags or [],
+        "reactions": [],
+    }
+
+    if parent_id and parent_id != 0:
+        parent_msg = db.query(db_models.DBMessage).filter(db_models.DBMessage.message_id == parent_id).first()
+        if parent_msg:
+            p_dict = models.Message.from_orm(parent_msg).dict()
+            p_author = db.query(db_models.DBUser).filter(db_models.DBUser.user_id == parent_msg.author_id).first()
+            if p_author:
+                p_dict["author"] = models.UserResponse.from_orm(p_author).dict()
+            broadcast_msg["parent_message"] = p_dict
+
+    await manager.broadcast(channel.channel_id, broadcast_msg)
+
+    if content and content.get("text"):
+        urls = re.findall(r'(<)?(https?:\/\/[^\s<>]+)(>)?', content["text"])
+        for has_open, url, has_close in urls:
+            if not (has_open and has_close):
+                asyncio.create_task(fetch_link_metadata_task(channel.channel_id, msg_id, url))
+                break
+
+    channel_members = channel.members if channel.members else []
+    for member_id in channel_members:
+        if member_id == user.user_id:
+            continue
+        active_sockets_in_chan = manager.active_connections.get(channel.channel_id, [])
+        member_sockets = manager.user_sockets.get(member_id, [])
+        is_actively_in_chan = any(ws in active_sockets_in_chan for ws in member_sockets)
+        if member_sockets and not is_actively_in_chan:
+            await manager.send_personal_notification(member_id, {
+                "type": "unread_notification",
+                **{k: v for k, v in broadcast_msg.items() if k != "parent_message"},
+            })
+    return broadcast_msg
+
+
+async def scheduled_message_worker():
+    await asyncio.sleep(3)
+    while True:
+        try:
+            db = next(get_db())
+            try:
+                now = int(time.time())
+                due = db.query(db_models.DBScheduledMessage).filter(
+                    db_models.DBScheduledMessage.status == "pending",
+                    db_models.DBScheduledMessage.scheduled_at <= now,
+                ).order_by(db_models.DBScheduledMessage.scheduled_at.asc()).limit(25).all()
+                for sched in due:
+                    channel = db.query(db_models.DBChannel).filter(
+                        db_models.DBChannel.channel_id == sched.channel_id
+                    ).first()
+                    author = db.query(db_models.DBUser).filter(
+                        db_models.DBUser.user_id == sched.author_id
+                    ).first()
+                    if not channel or not author:
+                        sched.status = "cancelled"
+                        db.commit()
+                        continue
+                    if author.status == "BANNED":
+                        sched.status = "cancelled"
+                        db.commit()
+                        continue
+                    if author.muted_until and author.muted_until > now:
+                        continue
+                    server = None
+                    if channel.server_id:
+                        server = db.query(db_models.DBServer).filter(
+                            db_models.DBServer.server_id == channel.server_id
+                        ).first()
+                    if not can_send_in_channel(channel, server, author.user_id):
+                        sched.status = "cancelled"
+                        db.commit()
+                        continue
+                    try:
+                        await deliver_channel_message(
+                            channel=channel,
+                            user=author,
+                            content=sched.content or {"text": "", "attachments": [], "embeds": []},
+                            parent_id=sched.parent_id or 0,
+                            thread_id=sched.thread_id or 0,
+                            mentions=sched.mentions or [],
+                            flags=sched.flags or [],
+                            message_type="DEFAULT",
+                            db=db,
+                        )
+                        sched.status = "sent"
+                        db.commit()
+                    except Exception as e:
+                        print(f"[scheduled] failed id={sched.id}: {e}")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[scheduled worker] {e}")
+        await asyncio.sleep(5)
+
 
 # websockets
 class ConnectionManager:
@@ -402,6 +653,10 @@ class ConnectionManager:
                 if user:
                     user.last_active_at = int(time.time())
                     db.commit()
+                try:
+                    purge_temporary_memberships(user_id, db)
+                except Exception as e:
+                    print(f"[temp members] purge failed for {user_id}: {e}")
     
     async def broadcast(self, channel_id: int, message_data: dict):
         if channel_id in self.active_connections:
@@ -1095,7 +1350,7 @@ def create_server(server_data: models.ServerCreate, current_user: db_models.DBUs
     if getattr(server_data, "server_banner", None) and not server_data.server_banner.startswith(("http://", "https://", "/uploads/")):
         raise HTTPException(status_code=400, detail="Invalid server banner URL.")
 
-    invite = generate_invite_code()
+    invite = generate_invite_code(8, db)
     db_server = db_models.DBServer(
         server_name=server_data.server_name,
         server_description=server_data.server_description,
@@ -1125,6 +1380,17 @@ def create_server(server_data: models.ServerCreate, current_user: db_models.DBUs
     )
     db.add(db_channel)
     db_server.channels = 1
+    db.add(db_models.DBServerInvite(
+        code=invite,
+        server_id=db_server.server_id,
+        creator_id=current_user.user_id,
+        max_uses=None,
+        uses=0,
+        expires_at=None,
+        temporary=False,
+        revoked=False,
+        created_at=int(time.time()),
+    ))
     db.commit()
     
     return server_to_response(db_server, current_user.user_id)
@@ -1338,33 +1604,56 @@ def get_server_presence(server_id: int, current_user: db_models.DBUser = Depends
 
 @app.get("/servers/invite/{invite_code}/preview", response_model=models.InvitePreview)
 def get_invite_preview(invite_code: str, db: Session = Depends(get_db)):
-    server = db.query(db_models.DBServer).filter(db_models.DBServer.invite_code == invite_code).first()
+    server, inv = resolve_invite(invite_code, db)
     if not server:
         raise HTTPException(status_code=404, detail="Invalid invite code")
-        
-    online_count = sum(1 for uid in server.members if len(manager.user_sockets.get(uid, [])) > 0 or is_system_user(uid, db))
-    
+    if inv and not invite_is_valid(inv):
+        if inv.revoked:
+            raise HTTPException(status_code=410, detail="This invite has been revoked")
+        if inv.expires_at is not None and inv.expires_at <= int(time.time()):
+            raise HTTPException(status_code=410, detail="This invite has expired")
+        if inv.max_uses is not None and (inv.uses or 0) >= inv.max_uses:
+            raise HTTPException(status_code=410, detail="This invite has reached its max uses")
+        raise HTTPException(status_code=410, detail="This invite is no longer valid")
+
+    online_count = sum(1 for uid in (server.members or []) if len(manager.user_sockets.get(uid, [])) > 0 or is_system_user(uid, db))
+
     return {
         "server_name": server.server_name,
         "server_description": server.server_description,
         "server_image": server.server_image,
-        "total_members": len(server.members),
+        "total_members": len(server.members or []),
         "online_members": online_count,
-        "is_verified": server.is_verified
+        "is_verified": server.is_verified,
+        "expires_at": inv.expires_at if inv else None,
+        "max_uses": inv.max_uses if inv else None,
+        "uses": (inv.uses or 0) if inv else None,
+        "temporary": bool(inv.temporary) if inv else False,
     }
 
 @app.post("/servers/join-by-invite/{invite_code}")
 def join_by_invite(invite_code: str, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    server = db.query(db_models.DBServer).filter(db_models.DBServer.invite_code == invite_code).first()
+    server, inv = resolve_invite(invite_code, db)
     if not server:
         raise HTTPException(status_code=404, detail="Invalid invite code")
-        
-    if current_user.user_id not in server.members:
-        updated_server_members = list(server.members)
+    if inv and not invite_is_valid(inv):
+        if inv.revoked:
+            raise HTTPException(status_code=410, detail="This invite has been revoked")
+        if inv.expires_at is not None and inv.expires_at <= int(time.time()):
+            raise HTTPException(status_code=410, detail="This invite has expired")
+        if inv.max_uses is not None and (inv.uses or 0) >= inv.max_uses:
+            raise HTTPException(status_code=410, detail="This invite has reached its max uses")
+        raise HTTPException(status_code=410, detail="This invite is no longer valid")
+
+    already_member = current_user.user_id in (server.members or [])
+    if not already_member:
+        updated_server_members = list(server.members or [])
         updated_server_members.append(current_user.user_id)
         server.members = updated_server_members
-        set_member_role(server, current_user.user_id, "default")
-        
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(server, "members")
+        set_member_roles(server, current_user.user_id, ["default"])
+
         channels = db.query(db_models.DBChannel).filter(db_models.DBChannel.server_id == server.server_id).all()
         for channel in channels:
             if can_view_channel(channel, server, current_user.user_id):
@@ -1372,9 +1661,122 @@ def join_by_invite(invite_code: str, current_user: db_models.DBUser = Depends(ge
                 if current_user.user_id not in updated_channel_members:
                     updated_channel_members.append(current_user.user_id)
                     channel.members = updated_channel_members
-        
-        db.commit()
-    return {"status": "success", "detail": f"Joined server"}
+                    flag_modified(channel, "members")
+
+        if inv and inv.temporary:
+            existing_temp = db.query(db_models.DBTemporaryMember).filter(
+                db_models.DBTemporaryMember.server_id == server.server_id,
+                db_models.DBTemporaryMember.user_id == current_user.user_id,
+            ).first()
+            if not existing_temp:
+                db.add(db_models.DBTemporaryMember(server_id=server.server_id, user_id=current_user.user_id))
+
+    if inv and not already_member:
+        inv.uses = (inv.uses or 0) + 1
+
+    db.commit()
+    return {"status": "success", "detail": "Joined server", "temporary": bool(inv.temporary) if inv else False}
+
+
+@app.get("/servers/{server_id}/invites", response_model=list[models.InviteResponse])
+def list_server_invites(server_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if current_user.user_id not in (server.members or []):
+        raise HTTPException(status_code=403, detail="Access Denied")
+    if server.invite_code == "GLOBAL":
+        return []
+    if server.invite_code:
+        legacy = db.query(db_models.DBServerInvite).filter(
+            db_models.DBServerInvite.code == server.invite_code
+        ).first()
+        if not legacy:
+            db.add(db_models.DBServerInvite(
+                code=server.invite_code,
+                server_id=server.server_id,
+                creator_id=server.owner_id,
+                max_uses=None,
+                uses=0,
+                expires_at=None,
+                temporary=False,
+                revoked=False,
+                created_at=int(time.time()),
+            ))
+            db.commit()
+    invites = db.query(db_models.DBServerInvite).filter(
+        db_models.DBServerInvite.server_id == server_id,
+        db_models.DBServerInvite.revoked == False,
+    ).order_by(db_models.DBServerInvite.created_at.desc()).all()
+    return [invite_to_response(i) for i in invites]
+
+
+@app.post("/servers/{server_id}/invites", response_model=models.InviteResponse, status_code=201)
+def create_server_invite(
+    server_id: int,
+    body: models.InviteCreate,
+    current_user: db_models.DBUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if current_user.user_id not in (server.members or []):
+        raise HTTPException(status_code=403, detail="Access Denied")
+    if server.invite_code == "GLOBAL":
+        raise HTTPException(status_code=400, detail="Cannot create invites for the General server")
+
+    max_uses = body.max_uses
+    if max_uses is not None and max_uses < 1:
+        raise HTTPException(status_code=400, detail="max_uses must be at least 1 or null for unlimited")
+    expires_at = None
+    if body.expires_in_seconds is not None:
+        if body.expires_in_seconds < 60:
+            raise HTTPException(status_code=400, detail="Expiry must be at least 60 seconds")
+        if body.expires_in_seconds > 60 * 60 * 24 * 30:
+            raise HTTPException(status_code=400, detail="Expiry cannot exceed 30 days")
+        expires_at = int(time.time()) + int(body.expires_in_seconds)
+
+    code = generate_invite_code(8, db)
+    inv = db_models.DBServerInvite(
+        code=code,
+        server_id=server_id,
+        creator_id=current_user.user_id,
+        max_uses=max_uses,
+        uses=0,
+        expires_at=expires_at,
+        temporary=bool(body.temporary),
+        revoked=False,
+        created_at=int(time.time()),
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    return invite_to_response(inv)
+
+
+@app.delete("/servers/{server_id}/invites/{invite_id}")
+def revoke_server_invite(
+    server_id: int,
+    invite_id: int,
+    current_user: db_models.DBUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    inv = db.query(db_models.DBServerInvite).filter(
+        db_models.DBServerInvite.invite_id == invite_id,
+        db_models.DBServerInvite.server_id == server_id,
+    ).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    is_admin = server.owner_id == current_user.user_id or has_permission(server, current_user.user_id, "ADMIN")
+    if inv.creator_id != current_user.user_id and not is_admin:
+        raise HTTPException(status_code=403, detail="Only the creator or a server admin can revoke this invite")
+    inv.revoked = True
+    db.commit()
+    return {"status": "success", "detail": "Invite revoked"}
 
 @app.get("/servers/{server_id}/categories", response_model=list[models.CategoryResponse])
 def get_server_categories(server_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1579,6 +1981,126 @@ def get_channel_history(channel_id: int, limit: int = 50, current_user: db_model
         results.append(msg_dict)
         
     return results
+
+
+@app.post("/channels/{channel_id}/scheduled-messages", response_model=models.ScheduledMessageResponse, status_code=201)
+def create_scheduled_message(
+    channel_id: int,
+    body: models.ScheduledMessageCreate,
+    current_user: db_models.DBUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    channel = db.query(db_models.DBChannel).filter(db_models.DBChannel.channel_id == channel_id).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    server = None
+    if channel.server_id is not None:
+        server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == channel.server_id).first()
+    if not can_send_in_channel(channel, server, current_user.user_id):
+        raise HTTPException(status_code=403, detail="You cannot send messages in this channel")
+    if current_user.muted_until and current_user.muted_until > int(time.time()):
+        raise HTTPException(status_code=403, detail="You are currently muted")
+
+    text = (body.content.text or "").strip()
+    attachments = body.content.attachments or []
+    if not text and not attachments:
+        raise HTTPException(status_code=400, detail="Message content is empty")
+
+    now = int(time.time())
+    if body.scheduled_at < now + 30:
+        raise HTTPException(status_code=400, detail="Schedule time must be at least 30 seconds in the future")
+    if body.scheduled_at > now + 60 * 60 * 24 * 30:
+        raise HTTPException(status_code=400, detail="Cannot schedule more than 30 days ahead")
+
+    content_dict = body.content.dict() if hasattr(body.content, "dict") else body.content
+    sched = db_models.DBScheduledMessage(
+        channel_id=channel_id,
+        author_id=current_user.user_id,
+        content=content_dict,
+        parent_id=body.parent_id or 0,
+        thread_id=body.thread_id or 0,
+        mentions=body.mentions or [],
+        flags=body.flags or [],
+        scheduled_at=int(body.scheduled_at),
+        created_at=now,
+        status="pending",
+    )
+    db.add(sched)
+    db.commit()
+    db.refresh(sched)
+    return {
+        "id": sched.id,
+        "channel_id": sched.channel_id,
+        "author_id": sched.author_id,
+        "content": sched.content,
+        "parent_id": sched.parent_id or 0,
+        "thread_id": sched.thread_id or 0,
+        "mentions": sched.mentions or [],
+        "flags": sched.flags or [],
+        "scheduled_at": sched.scheduled_at,
+        "created_at": sched.created_at,
+        "status": sched.status,
+    }
+
+
+@app.get("/channels/{channel_id}/scheduled-messages", response_model=list[models.ScheduledMessageResponse])
+def list_scheduled_messages(
+    channel_id: int,
+    current_user: db_models.DBUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    channel = db.query(db_models.DBChannel).filter(db_models.DBChannel.channel_id == channel_id).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    server = None
+    if channel.server_id is not None:
+        server = db.query(db_models.DBServer).filter(db_models.DBServer.server_id == channel.server_id).first()
+    if not can_view_channel(channel, server, current_user.user_id):
+        raise HTTPException(status_code=403, detail="Access Denied")
+
+    rows = db.query(db_models.DBScheduledMessage).filter(
+        db_models.DBScheduledMessage.channel_id == channel_id,
+        db_models.DBScheduledMessage.author_id == current_user.user_id,
+        db_models.DBScheduledMessage.status == "pending",
+    ).order_by(db_models.DBScheduledMessage.scheduled_at.asc()).all()
+
+    return [
+        {
+            "id": s.id,
+            "channel_id": s.channel_id,
+            "author_id": s.author_id,
+            "content": s.content,
+            "parent_id": s.parent_id or 0,
+            "thread_id": s.thread_id or 0,
+            "mentions": s.mentions or [],
+            "flags": s.flags or [],
+            "scheduled_at": s.scheduled_at,
+            "created_at": s.created_at,
+            "status": s.status,
+        }
+        for s in rows
+    ]
+
+
+@app.delete("/scheduled-messages/{scheduled_id}")
+def cancel_scheduled_message(
+    scheduled_id: int,
+    current_user: db_models.DBUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sched = db.query(db_models.DBScheduledMessage).filter(
+        db_models.DBScheduledMessage.id == scheduled_id
+    ).first()
+    if not sched:
+        raise HTTPException(status_code=404, detail="Scheduled message not found")
+    if sched.author_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="You can only cancel your own scheduled messages")
+    if sched.status != "pending":
+        raise HTTPException(status_code=400, detail="Only pending messages can be cancelled")
+    sched.status = "cancelled"
+    db.commit()
+    return {"status": "success", "detail": "Scheduled message cancelled"}
+
 
 @app.get("/messages/{message_id}", response_model=models.Message)
 def get_single_message(message_id: int, current_user: db_models.DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1815,7 +2337,7 @@ async def custom_http_exception_handler(request, exc):
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         if "." in path.rsplit("/", 1)[-1]:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-        api_prefixes = ["/login", "/register", "/users", "/servers", "/channels", "/ws", "/admin", "/dms", "/messages"]
+        api_prefixes = ["/login", "/register", "/users", "/servers", "/channels", "/ws", "/admin", "/dms", "/messages", "/scheduled-messages", "/api"]
         if not any(path.startswith(prefix) for prefix in api_prefixes):
             if os.path.exists(_FRONTEND_INDEX):
                 return FileResponse(_FRONTEND_INDEX)

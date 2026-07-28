@@ -80,4 +80,43 @@ class DBChannelReadState(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, index=True)
     channel_id = Column(Integer, index=True)
-    last_read_message_id = Column(Integer, default=0)
+    last_read_message_id = Column(Integer, default=0)
+
+
+class DBServerInvite(Base):
+    __tablename__ = "server_invites"
+
+    invite_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    code = Column(String, unique=True, index=True)
+    server_id = Column(Integer, index=True)
+    creator_id = Column(Integer, index=True)
+    max_uses = Column(Integer, nullable=True)
+    uses = Column(Integer, default=0)
+    expires_at = Column(Integer, nullable=True)
+    temporary = Column(Boolean, default=False)
+    revoked = Column(Boolean, default=False)
+    created_at = Column(Integer)
+
+
+class DBTemporaryMember(Base):
+    __tablename__ = "temporary_members"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    server_id = Column(Integer, index=True)
+    user_id = Column(Integer, index=True)
+
+
+class DBScheduledMessage(Base):
+    __tablename__ = "scheduled_messages"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    channel_id = Column(Integer, index=True)
+    author_id = Column(Integer, index=True)
+    content = Column(JSON)
+    parent_id = Column(Integer, default=0)
+    thread_id = Column(Integer, default=0)
+    mentions = Column(JSON)
+    flags = Column(JSON)
+    scheduled_at = Column(Integer, index=True)
+    created_at = Column(Integer)
+    status = Column(String, default="pending")
