@@ -720,7 +720,7 @@ function App() {
             ) : customStatus.emoji?.name ? (
               <span className="lanyard-emoji">{customStatus.emoji.name}</span>
             ) : null}
-            <span>{customStatus.state}</span>
+            <span>{customStatus.state ? `"${customStatus.state}"` : ''}</span>
           </div>
         )}
         {otherActivities.map((activity: any, idx: number) => {
@@ -765,7 +765,7 @@ function App() {
       return <div className="lanyard-list-status">Playing <strong>{gameStatus.name}</strong></div>;
     }
     if (customStatus) {
-      return <div className="lanyard-list-status">{customStatus.emoji?.name} {customStatus.state}</div>;
+      return <div className="lanyard-list-status">{customStatus.emoji?.name} {customStatus.state ? `"${customStatus.state}"` : ''}</div>;
     }
     return null;
   };
@@ -1213,7 +1213,7 @@ function App() {
           setUser({ ...currentUserRef.current, status: data.status });
         }
       } else if (data.type === 'unread_notification') {
-        if (!data.server_id && isViewingDMsRef.current) {
+        if (!data.server_id) {
           if (!dmsRef.current.some(d => d.channel_id === data.channel_id)) {
             fetch(`${API_BASE}/dms`, { headers: { Authorization: `Bearer ${token}` } })
               .then(res => res.json())
@@ -1253,6 +1253,13 @@ function App() {
           setMessages(prev => prev.map(msg => msg.message_id === data.message_id ? data : msg));
         }
       } else {
+        if (!data.server_id && !dmsRef.current.some(d => d.channel_id === data.channel_id)) {
+          fetch(`${API_BASE}/dms`, { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => res.json())
+            .then(fetched => setDms(fetched))
+            .catch(e => console.error(e));
+        }
+
         if (data.channel_id === activeChannelRef.current?.channel_id) {
           setMessages(prev =>
             prev.some(msg => msg.message_id === data.message_id) ? prev : [...prev, data]

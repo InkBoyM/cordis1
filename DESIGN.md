@@ -1,8 +1,7 @@
 # Frontend
 - **Unread states & Pings**: Displays a red dot with mention counts for direct messages (under DM tab/home icon) and server icons.
 - **DM Sidebar Pings**: When on the DM page, individual DM channel list items now render a red badge showing the unread mention count from that user.
-- **Dynamic DM Sidebar Refresh**: Received messages for new DMs that are not currently in the sidebar trigger an async refresh to fetch and list the new conversation in real-time.
-- **Modal Keyboard Shortcuts**: Users can use the `Esc` key to exit most active modals and overlay windows.
+- **Dynamic DM Sidebar Refresh**: Received messages (or unread notifications) for new DMs that are not currently in the sidebar trigger an async refresh to fetch and list the new conversation in real-time, regardless of what view or server the user is currently looking at.
 - **Admin Panel UI**: The Moderator (Admin) Panel is now rendered as a fullscreen overlay rather than a fixed-width popup. The search bar is constrained in width for better UX on ultrawide displays, and the user result card now mimics the styling and layout of a standard profile popover, including rendering the user's joined servers.
 - **Login Homepage UI**: Added "Cordis v1.1" title and "made by KillSecurly (logo), a project of LVMLabs (logo)" branding above the warning block for unauthenticated users. The warning block title has been changed from "Cordis v1.0" to "Warning".
 - **Member Sidebar Visibility**: The server member list sidebar is now dynamically filtered to only display users who have permission to view the currently active channel, based on the channel's required roles.
